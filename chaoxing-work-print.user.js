@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通作业题目答案打印整理
 // @namespace    https://chaoxing-print-helper.local/
-// @version      1.3.0
+// @version      1.4.0
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
@@ -509,6 +509,18 @@
       font-size: 16px;
       line-height: 1.35;
     }
+    .work-meta {
+      margin: -2px 0 6px;
+      color: #444;
+      font-size: 11px;
+    }
+    .blank-page {
+      break-before: page;
+      break-after: page;
+      page-break-before: always;
+      page-break-after: always;
+      min-height: 100vh;
+    }
     .question {
       break-inside: avoid;
       border-bottom: 1px solid #d0d0d0;
@@ -596,6 +608,10 @@
       body { background: #fff; }
       .page { max-width: none; padding: 0; }
       .toolbar { display: none; }
+      .batch-cover { display: none; }
+      .batch-print .work-section { page-break-before: always; break-before: page; }
+      .batch-print .work-section:first-of-type { page-break-before: auto; break-before: auto; }
+      .blank-page { height: 100vh; min-height: 100vh; }
       .question { page-break-inside: avoid; }
       a { color: inherit; text-decoration: none; }
       @page { margin: 10mm 9mm; }
@@ -631,16 +647,51 @@
 </html>`;
   }
 
-  function buildBatchPrintableHtml(items, title) {
+  function buildBatchPrintFriendlyScript(enabled) {
+    if (!enabled) return "";
+    return `<script>
+(function () {
+  var PAGE_HEIGHT_PX = 1046;
+  function clearBlankPages() {
+    document.querySelectorAll(".blank-page").forEach(function (node) { node.remove(); });
+  }
+  function fillDuplexBlankPages() {
+    clearBlankPages();
+    if (!document.body.classList.contains("print-friendly")) return;
+    var sections = Array.prototype.slice.call(document.querySelectorAll(".work-section"));
+    sections.forEach(function (section, index) {
+      if (index >= sections.length - 1) return;
+      var pages = Math.max(1, Math.ceil(section.scrollHeight / PAGE_HEIGHT_PX));
+      if (pages % 2 !== 1) return;
+      var blank = document.createElement("section");
+      blank.className = "blank-page";
+      blank.setAttribute("aria-hidden", "true");
+      section.after(blank);
+    });
+  }
+  window.cxRefreshPrintBlanks = fillDuplexBlankPages;
+  window.addEventListener("load", function () { setTimeout(fillDuplexBlankPages, 120); });
+  window.addEventListener("beforeprint", fillDuplexBlankPages);
+}());
+<\/script>`;
+  }
+
+  function buildBatchPrintableHtml(items, title, options = {}) {
     const generatedAt = new Date().toLocaleString();
     const sections = items.map((item) => `
       <section class="work-section">
         <h2 class="work-title">${escapeHtml(item.title)}</h2>
+        <div class="work-meta">共 ${item.questions.length} 题 · 生成时间：${escapeHtml(generatedAt)}</div>
         ${buildQuestionArticlesHtml(item.questions, item.options)}
       </section>
     `).join("");
     const questionCount = items.reduce((sum, item) => sum + item.questions.length, 0);
     const showAnalysis = items.some((item) => item.options.includeAnalysis !== false);
+    const bodyClasses = [
+      showAnalysis ? "show-analysis" : "",
+      "batch-print",
+      options.printFriendly ? "print-friendly" : "",
+    ].filter(Boolean).join(" ");
     return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -648,18 +699,20 @@
   <title>${escapeHtml(title)} - PDF</title>
   <style>${printableStyle()}</style>
 </head>
-<body class="${showAnalysis ? "show-analysis" : ""}">
+<body class="${bodyClasses}">
   <main class="page">
-    <header>
+    <header class="batch-cover">
       <h1>${escapeHtml(title)}</h1>
-      <div class="meta">共 ${items.length} 个作业 · ${questionCount} 题 · 生成时间：${escapeHtml(generatedAt)}</div>
+      <div class="meta">共 ${items.length} 个作业 · ${questionCount} 题 · 生成时间：${escapeHtml(generatedAt)}${options.printFriendly ? " · 已启用打印友好空白页" : ""}</div>
     </header>
     <div class="toolbar">
       <button onclick="window.print()">打印/保存 PDF</button>
       <button onclick="document.body.classList.toggle('show-analysis')">显示/隐藏解析</button>
+      ${options.printFriendly ? `<button onclick="window.cxRefreshPrintBlanks && window.cxRefreshPrintBlanks()">刷新双面空白页</button>` : ""}
     </div>
     ${sections}
   </main>
+  ${buildBatchPrintFriendlyScript(options.printFriendly)}
 </body>
 </html>`;
   }
@@ -1094,6 +1147,7 @@
       markNoAnswer: panel.querySelector('[data-batch-option="mark-no-answer"]')?.getAttribute("aria-checked") === "true",
       addSummary: panel.querySelector('[data-batch-option="add-summary"]')?.getAttribute("aria-checked") === "true",
       includeAnalysis: panel.querySelector('[data-batch-option="include-analysis"]')?.getAttribute("aria-checked") === "true",
+      printFriendly: panel.querySelector('[data-batch-option="print-friendly"]')?.getAttribute("aria-checked") === "true",
     };
   }
 
@@ -1389,7 +1443,9 @@
       alert("没有成功生成 PDF 内容。" + (failures.length ? "\n" + failures.join("\n") : ""));
       return;
     }
-    const html = buildBatchPrintableHtml(items, document.title || "学习通作业批量导出");
+    const html = buildBatchPrintableHtml(items, document.title || "学习通作业批量导出", {
+      printFriendly: options.printFriendly,
+    });
     const win = window.open("", "_blank");
     if (!win) {
       alert("浏览器拦截了弹窗，请允许此页面打开新窗口。");
@@ -1536,6 +1592,7 @@
       addCheckbox(exportOptions, "无答案标注", { batchOption: "mark-no-answer" }, true);
       addCheckbox(exportOptions, "导出清单", { batchOption: "add-summary" }, true);
       addCheckbox(exportOptions, "显示解析", { batchOption: "include-analysis" }, true);
+      addCheckbox(exportOptions, "打印友好", { batchOption: "print-friendly" }, false);
       panel.appendChild(options);
 
       const tools = document.createElement("div");
