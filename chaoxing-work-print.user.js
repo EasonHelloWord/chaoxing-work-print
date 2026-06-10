@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通作业题目答案打印整理
 // @namespace    https://chaoxing-print-helper.local/
-// @version      1.4.0
+// @version      1.5.0
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
@@ -26,6 +26,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      chaoxing.com
 // @connect      *.chaoxing.com
+// @connect      p.ananas.chaoxing.com
+// @connect      *.ananas.chaoxing.com
 // @connect      mooc1.chaoxing.com
 // @connect      mooc1-1.chaoxing.com
 // @run-at       document-idle
@@ -49,6 +51,16 @@
     overdue: "超时/过期",
     unknown: "其他",
   };
+  const QUESTION_TYPE_FILTERS = [
+    { key: "single", label: "单选题", pattern: /单选/ },
+    { key: "multiple", label: "多选题", pattern: /多选/ },
+    { key: "judgement", label: "判断题", pattern: /判断|正误|对错/ },
+    { key: "blank", label: "填空题", pattern: /填空/ },
+    { key: "short", label: "简答题", pattern: /简答|问答/ },
+    { key: "essay", label: "论述题", pattern: /论述|作文|写作/ },
+    { key: "calculation", label: "计算题", pattern: /计算/ },
+    { key: "other", label: "其他题型", pattern: null },
+  ];
 
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -89,6 +101,16 @@
       #${PANEL_ID} button.secondary {
         background: #fff;
         color: #2563eb;
+      }
+      #${PANEL_ID} select {
+        min-width: 0;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        background: #fff;
+        color: #334155;
+        padding: 5px 7px;
+        font: inherit;
+        font-size: 12px;
       }
       #${PANEL_ID} button:disabled {
         cursor: not-allowed;
@@ -133,6 +155,20 @@
         color: #334155;
         font-size: 17px;
         line-height: 1;
+      }
+      #${PANEL_ID}.is-collapsed {
+        min-width: 0;
+        width: auto;
+        padding: 8px;
+      }
+      #${PANEL_ID}.is-collapsed .cx-options,
+      #${PANEL_ID}.is-collapsed .cx-list-tools,
+      #${PANEL_ID}.is-collapsed .cx-work-list,
+      #${PANEL_ID}.is-collapsed .cx-row > :not(.cx-collapse) {
+        display: none;
+      }
+      #${PANEL_ID} .cx-collapse {
+        margin-left: auto;
       }
       #${PANEL_ID} .cx-list-tools {
         display: flex;
@@ -196,7 +232,7 @@
       }
       #${PANEL_ID} .cx-work-item {
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-columns: auto auto minmax(0, 1fr) auto;
         gap: 7px;
         align-items: center;
         padding: 5px 4px;
@@ -205,6 +241,19 @@
       }
       #${PANEL_ID} .cx-work-item:hover {
         background: #f8fafc;
+      }
+      #${PANEL_ID} .cx-work-item[draggable="true"] {
+        cursor: grab;
+      }
+      #${PANEL_ID} .cx-work-item.is-dragging {
+        opacity: .45;
+      }
+      #${PANEL_ID} .cx-drag {
+        color: #94a3b8;
+        cursor: grab;
+        font-size: 13px;
+        line-height: 1;
+        user-select: none;
       }
       #${PANEL_ID} .cx-work-title {
         min-width: 0;
@@ -277,6 +326,98 @@
       });
     });
     return clone.innerHTML.trim();
+  }
+
+  function imageSourcesFromHtml(html) {
+    if (!html || !/<img\b/i.test(html)) return [];
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    return [...template.content.querySelectorAll("img")]
+      .map((img) => img.getAttribute("src") || img.getAttribute("data-original") || "")
+      .filter(Boolean);
+  }
+
+  function questionImages(question) {
+    const sources = [
+      ...imageSourcesFromHtml(question.stemHtml),
+      ...imageSourcesFromHtml(question.rightAnswerHtml),
+      ...question.options.flatMap((option) => imageSourcesFromHtml(option.html)),
+    ];
+    return [...new Set(sources)];
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result || "");
+      reader.onerror = () => reject(reader.error || new Error("图片读取失败"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function imageUrlToDataUrl(url, cache) {
+    if (!url || /^data:/i.test(url)) return url;
+    if (cache.has(url)) return cache.get(url);
+    try {
+      const blob = await requestBlob(url);
+      const dataUrl = await blobToDataUrl(blob);
+      cache.set(url, dataUrl);
+      return dataUrl;
+    } catch (error) {
+      cache.set(url, url);
+      return url;
+    }
+  }
+
+  async function transformHtmlImages(html, imageMode, cache) {
+    if (!html || imageMode !== "base64" || !/<img\b/i.test(html)) return html || "";
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const images = [...template.content.querySelectorAll("img")];
+    for (const img of images) {
+      const src = img.getAttribute("src") || img.getAttribute("data-original") || "";
+      if (src) img.setAttribute("src", await imageUrlToDataUrl(src, cache));
+    }
+    return template.innerHTML;
+  }
+
+  function questionTypeKey(question) {
+    const type = cleanText(question.type);
+    const matched = QUESTION_TYPE_FILTERS.find((filter) => filter.pattern && filter.pattern.test(type));
+    return matched ? matched.key : "other";
+  }
+
+  function filterQuestionsByType(questions, selectedTypes) {
+    if (!selectedTypes) return questions;
+    if (!selectedTypes.size) return [];
+    return questions.filter((question) => selectedTypes.has(questionTypeKey(question)));
+  }
+
+  function sortQuestionsForExport(questions, sortMode) {
+    if (sortMode !== "auto") return questions;
+    const order = new Map(QUESTION_TYPE_FILTERS.map((filter, index) => [filter.key, index]));
+    return [...questions].sort((a, b) => {
+      const diff = (order.get(questionTypeKey(a)) || 99) - (order.get(questionTypeKey(b)) || 99);
+      return diff || Number(a.number) - Number(b.number);
+    });
+  }
+
+  async function prepareQuestionsForExport(questions, options = {}) {
+    const imageCache = new Map();
+    const filtered = sortQuestionsForExport(filterQuestionsByType(questions, options.selectedQuestionTypes), options.questionSortMode);
+    const prepared = [];
+    for (const question of filtered) {
+      prepared.push({
+        ...question,
+        stemHtml: await transformHtmlImages(question.stemHtml, options.imageMode, imageCache),
+        rightAnswerHtml: await transformHtmlImages(question.rightAnswerHtml, options.imageMode, imageCache),
+        options: await Promise.all(question.options.map(async (option) => ({
+          ...option,
+          html: await transformHtmlImages(option.html, options.imageMode, imageCache),
+        }))),
+      });
+    }
+    return prepared.map((question, index) => ({ ...question, number: String(index + 1) }));
   }
 
   function textFromNode(node) {
@@ -732,12 +873,82 @@
     const lines = [getPageTitle(), `共 ${questions.length} 题`, ""];
     questions.forEach((q) => {
       lines.push(`${q.number}. ${q.stemText}`);
+      questionImages(q).forEach((src) => lines.push(`图片：${src}`));
       q.options.forEach((opt) => lines.push(`${opt.letter}. ${opt.text}`));
       if (includeAnswers && (q.rightAnswer || q.rightAnswerHtml)) lines.push(`答案：${compactAnswer(q)}`);
       if (includeAnswers && includeAnalysis && q.analysis) lines.push(`解析：${q.analysis}`);
       lines.push("");
     });
     return lines.join("\n");
+  }
+
+  function buildMarkdownText(questions, title, options = {}) {
+    const includeAnswers = options.includeAnswers !== false;
+    const includeAnalysis = options.includeAnalysis !== false;
+    const lines = [`# ${title}`, "", `共 ${questions.length} 题`, ""];
+    questions.forEach((q) => {
+      const type = q.type ? ` [${q.type}]` : "";
+      lines.push(`## ${q.number}.${type} ${q.stemText}`);
+      questionImages(q).forEach((src) => lines.push(`![图片](${src})`));
+      q.options.forEach((opt) => {
+        lines.push(`- ${opt.letter}. ${opt.text}`);
+        imageSourcesFromHtml(opt.html).forEach((src) => lines.push(`  - 图片：${src}`));
+      });
+      if (includeAnswers && (q.rightAnswer || q.rightAnswerHtml)) lines.push(`答案：${compactAnswer(q)}`);
+      if (includeAnswers && includeAnalysis && q.analysis) lines.push(`解析：${q.analysis}`);
+      lines.push("");
+    });
+    return lines.join("\n");
+  }
+
+  function tomlString(value) {
+    return `"""${String(value || "").replace(/"""/g, '\\"\\"\\"')}"""`;
+  }
+
+  function tomlArray(values) {
+    return `[${values.map((value) => JSON.stringify(value)).join(", ")}]`;
+  }
+
+  function buildTomlText(questions, title, options = {}) {
+    const includeAnswers = options.includeAnswers !== false;
+    const includeAnalysis = options.includeAnalysis !== false;
+    const lines = [
+      `title = ${JSON.stringify(title)}`,
+      `question_count = ${questions.length}`,
+      `generated_at = ${JSON.stringify(new Date().toLocaleString())}`,
+      "",
+    ];
+    questions.forEach((q) => {
+      lines.push("[[questions]]");
+      lines.push(`number = ${JSON.stringify(q.number)}`);
+      lines.push(`type = ${JSON.stringify(q.type || "")}`);
+      lines.push(`stem = ${tomlString(q.stemText)}`);
+      lines.push(`images = ${tomlArray(questionImages(q))}`);
+      if (includeAnswers && (q.rightAnswer || q.rightAnswerHtml)) lines.push(`answer = ${tomlString(compactAnswer(q))}`);
+      if (includeAnswers && includeAnalysis && q.analysis) lines.push(`analysis = ${tomlString(q.analysis)}`);
+      q.options.forEach((opt) => {
+        lines.push("[[questions.options]]");
+        lines.push(`letter = ${JSON.stringify(opt.letter)}`);
+        lines.push(`text = ${tomlString(opt.text)}`);
+        lines.push(`images = ${tomlArray(imageSourcesFromHtml(opt.html))}`);
+      });
+      lines.push("");
+    });
+    return lines.join("\n");
+  }
+
+  function buildExportContent(format, questions, title, options = {}) {
+    if (format === "md") return buildMarkdownText(questions, title, options);
+    if (format === "toml") return buildTomlText(questions, title, options);
+    if (format === "txt") return buildPlainText(questions, options);
+    return buildPrintableHtml(questions, title, options);
+  }
+
+  function exportMimeType(format) {
+    if (format === "md") return "text/markdown;charset=utf-8";
+    if (format === "toml") return "application/toml;charset=utf-8";
+    if (format === "txt") return "text/plain;charset=utf-8";
+    return "text/html;charset=utf-8";
   }
 
   function normalizeWorkUrl(rawUrl) {
@@ -941,6 +1152,38 @@
     });
   }
 
+  function requestBlob(url) {
+    const href = absolutizeUrl(url);
+    const sameOrigin = new URL(href, location.href).origin === location.origin;
+    if (sameOrigin || typeof GM_xmlhttpRequest !== "function") {
+      return fetch(href, {
+        credentials: "include",
+        redirect: "follow",
+      }).then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.blob();
+      });
+    }
+
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: href,
+        anonymous: false,
+        responseType: "blob",
+        onload: (response) => {
+          if (response.status >= 200 && response.status < 300) {
+            resolve(response.response);
+          } else {
+            reject(new Error(`HTTP ${response.status}`));
+          }
+        },
+        onerror: () => reject(new Error("图片请求失败")),
+        ontimeout: () => reject(new Error("图片请求超时")),
+      });
+    });
+  }
+
   async function collectWorksForBatch() {
     const domWorks = parseWorkList();
 
@@ -1123,6 +1366,15 @@
     const items = [...panel.querySelectorAll('[data-work-key]')];
     if (!items.length) return;
     panel.__cxSelectedWorkKeys = new Set(items.filter((item) => item.getAttribute("aria-checked") === "true").map((item) => item.dataset.workKey));
+    panel.__cxManualWorkOrder = items.map((item) => item.dataset.workKey);
+  }
+
+  function orderWorksByKeys(works, keys) {
+    if (!keys || !keys.length) return works;
+    const byKey = new Map(works.map((work) => [workKey(work), work]));
+    const ordered = keys.map((key) => byKey.get(key)).filter(Boolean);
+    const orderedKeys = new Set(ordered.map(workKey));
+    return [...ordered, ...works.filter((work) => !orderedKeys.has(workKey(work)))];
   }
 
   function defaultSelectedWorkKeys(panel, works, options) {
@@ -1130,6 +1382,21 @@
     const { filtered } = filterWorksForBatch(works, { ...options, selectedWorkKeys: null });
     panel.__cxSelectedWorkKeys = new Set(filtered.map(workKey));
     return panel.__cxSelectedWorkKeys;
+  }
+
+  function readSelectedQuestionTypes(panel) {
+    const items = [...panel.querySelectorAll('[data-question-type]')];
+    if (!items.length) return null;
+    return new Set(items.filter((item) => item.getAttribute("aria-checked") === "true").map((item) => item.dataset.questionType));
+  }
+
+  function readCommonExportOptions(panel) {
+    return {
+      includeAnalysis: panel.querySelector('[data-export-option="include-analysis"], [data-batch-option="include-analysis"]')?.getAttribute("aria-checked") !== "false",
+      imageMode: panel.querySelector("[data-image-mode]")?.value || "online",
+      questionSortMode: panel.querySelector("[data-question-sort-mode]")?.value || "manual",
+      selectedQuestionTypes: readSelectedQuestionTypes(panel),
+    };
   }
 
   function readBatchOptions(panel) {
@@ -1140,14 +1407,17 @@
     const selectedWorkKeys = selectedInputs.length
       ? new Set(selectedInputs.filter((input) => input.getAttribute("aria-checked") === "true").map((input) => input.dataset.workKey))
       : null;
+    const selectedWorkOrder = selectedInputs.map((input) => input.dataset.workKey);
     return {
+      ...readCommonExportOptions(panel),
       selectedCategories,
       selectedWorkKeys,
+      selectedWorkOrder,
       skipDuplicateTitles: panel.querySelector('[data-batch-option="skip-duplicate-titles"]')?.getAttribute("aria-checked") === "true",
       markNoAnswer: panel.querySelector('[data-batch-option="mark-no-answer"]')?.getAttribute("aria-checked") === "true",
       addSummary: panel.querySelector('[data-batch-option="add-summary"]')?.getAttribute("aria-checked") === "true",
-      includeAnalysis: panel.querySelector('[data-batch-option="include-analysis"]')?.getAttribute("aria-checked") === "true",
       printFriendly: panel.querySelector('[data-batch-option="print-friendly"]')?.getAttribute("aria-checked") === "true",
+      manualWorkSort: panel.querySelector('[data-batch-option="manual-work-sort"]')?.getAttribute("aria-checked") === "true",
     };
   }
 
@@ -1173,6 +1443,10 @@
       if (titleKey) seenTitles.add(titleKey);
       filtered.push(work);
     });
+    if (options.manualWorkSort && options.selectedWorkOrder && options.selectedWorkOrder.length) {
+      const order = new Map(options.selectedWorkOrder.map((key, index) => [key, index]));
+      filtered.sort((a, b) => (order.get(workKey(a)) ?? 99999) - (order.get(workKey(b)) ?? 99999));
+    }
     return { filtered, skipped };
   }
 
@@ -1191,18 +1465,25 @@
     const skippedKeys = new Map(skipped.map((item) => [workKey(item.work), item.reason]));
     const filteredKeys = new Set(filtered.map(workKey));
     const selectedKeys = defaultSelectedWorkKeys(panel, works, options);
-    works.forEach((work) => {
+    const orderedWorks = orderWorksByKeys(works, panel.__cxManualWorkOrder);
+    orderedWorks.forEach((work) => {
       const item = document.createElement("div");
       item.className = "cx-work-item";
       item.dataset.workKey = workKey(work);
       item.setAttribute("role", "checkbox");
       item.setAttribute("tabindex", "0");
+      item.draggable = options.manualWorkSort;
       item.setAttribute("aria-checked", selectedKeys.has(workKey(work)) && filteredKeys.has(workKey(work)) ? "true" : "false");
       item.title = skippedKeys.get(workKey(work)) || "";
 
       const box = document.createElement("span");
       box.className = "cx-box";
       box.setAttribute("aria-hidden", "true");
+
+      const drag = document.createElement("span");
+      drag.className = "cx-drag";
+      drag.textContent = "↕";
+      drag.title = options.manualWorkSort ? "拖拽排序" : "勾选手动排序后可拖拽";
 
       const title = document.createElement("span");
       title.className = "cx-work-title";
@@ -1214,15 +1495,42 @@
       badge.textContent = displayWorkStatus(work);
 
       item.addEventListener("click", () => {
+        if (item.__cxDragged) {
+          item.__cxDragged = false;
+          return;
+        }
         item.setAttribute("aria-checked", item.getAttribute("aria-checked") === "true" ? "false" : "true");
         rememberBatchSelection(panel);
+      });
+      item.addEventListener("dragstart", (event) => {
+        if (!options.manualWorkSort) return;
+        item.__cxDragged = true;
+        item.classList.add("is-dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", item.dataset.workKey);
+      });
+      item.addEventListener("dragend", () => {
+        item.classList.remove("is-dragging");
+        rememberBatchSelection(panel);
+        setTimeout(() => {
+          item.__cxDragged = false;
+        }, 150);
+      });
+      item.addEventListener("dragover", (event) => {
+        if (!options.manualWorkSort) return;
+        event.preventDefault();
+        const dragging = list.querySelector(".is-dragging");
+        if (!dragging || dragging === item) return;
+        const rect = item.getBoundingClientRect();
+        const after = event.clientY > rect.top + rect.height / 2;
+        list.insertBefore(dragging, after ? item.nextSibling : item);
       });
       item.addEventListener("keydown", (event) => {
         if (event.key !== " " && event.key !== "Enter") return;
         event.preventDefault();
         item.click();
       });
-      item.append(box, title, badge);
+      item.append(box, drag, title, badge);
       list.appendChild(item);
     });
   }
@@ -1362,7 +1670,9 @@
         const rawTitle = result.title || work.title;
         const includeAnswers = workCategory(work) === "answered";
         const title = includeAnswers || !options.markNoAnswer ? rawTitle : `${rawTitle}（${NO_ANSWER_MARK}）`;
-        const html = buildPrintableHtml(result.questions, title, { includeAnswers, includeAnalysis: options.includeAnalysis });
+        const questions = await prepareQuestionsForExport(result.questions, options);
+        if (!questions.length) throw new Error("当前题型筛选后没有题目");
+        const html = buildPrintableHtml(questions, title, { includeAnswers, includeAnalysis: options.includeAnalysis });
         const prefix = String(index + 1).padStart(2, "0");
         const fileName = `${prefix}. ${safeFileName(title)}.html`;
         zipFiles.push({
@@ -1373,7 +1683,7 @@
           title,
           fileName,
           status: displayWorkStatus(work),
-          questionCount: result.questions.length,
+          questionCount: questions.length,
         });
       } catch (error) {
         failures.push(`${work.title}: ${error.message || String(error)}`);
@@ -1407,6 +1717,66 @@
     }
   }
 
+  async function batchExportTextFormat(button, format) {
+    const panel = button.closest(`#${PANEL_ID}`) || document;
+    let prepared;
+    try {
+      prepared = await prepareBatchWorks(panel, button);
+    } catch (error) {
+      alert(error.message || String(error));
+      return;
+    }
+    const { works, skipped, options, oldText } = prepared;
+    const zipFiles = [];
+    const failures = [];
+    const exported = [];
+    for (let index = 0; index < works.length; index += 1) {
+      const work = works[index];
+      button.textContent = `导出${format.toUpperCase()} ${index + 1}/${works.length}`;
+      try {
+        const result = await fetchWorkDetail(work);
+        if (!result.questions.length) throw new Error("未识别到题目");
+        const includeAnswers = workCategory(work) === "answered";
+        const rawTitle = result.title || work.title;
+        const title = includeAnswers || !options.markNoAnswer ? rawTitle : `${rawTitle}（${NO_ANSWER_MARK}）`;
+        const questions = await prepareQuestionsForExport(result.questions, options);
+        if (!questions.length) throw new Error("当前题型筛选后没有题目");
+        const prefix = String(index + 1).padStart(2, "0");
+        const fileName = `${prefix}. ${safeFileName(title)}.${format}`;
+        zipFiles.push({
+          name: fileName,
+          content: buildExportContent(format, questions, title, { includeAnswers, includeAnalysis: options.includeAnalysis }),
+        });
+        exported.push({
+          title,
+          fileName,
+          status: displayWorkStatus(work),
+          questionCount: questions.length,
+        });
+      } catch (error) {
+        failures.push(`${work.title}: ${error.message || String(error)}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    if (options.addSummary) {
+      zipFiles.push({
+        name: "导出清单.txt",
+        content: buildBatchSummary(exported, skipped, failures),
+      });
+    } else if (failures.length) {
+      zipFiles.push({
+        name: "导出失败列表.txt",
+        content: failures.join("\n"),
+      });
+    }
+    if (zipFiles.length) {
+      button.textContent = "生成ZIP中";
+      downloadBlob(`${safeFileName(document.title || "学习通作业答案")}-${format}.zip`, createZipBlob(zipFiles));
+    }
+    restoreBatchButton(button, oldText);
+    alert(`已导出 ${exported.length} 个作业，跳过 ${skipped.length} 个，失败 ${failures.length} 个。`);
+  }
+
   async function batchExportPdf(button) {
     const panel = button.closest(`#${PANEL_ID}`) || document;
     let prepared;
@@ -1428,9 +1798,11 @@
         const includeAnswers = workCategory(work) === "answered";
         const rawTitle = result.title || work.title;
         const title = includeAnswers || !options.markNoAnswer ? rawTitle : `${rawTitle}（${NO_ANSWER_MARK}）`;
+        const questions = await prepareQuestionsForExport(result.questions, options);
+        if (!questions.length) throw new Error("当前题型筛选后没有题目");
         items.push({
           title,
-          questions: result.questions,
+          questions,
           options: { includeAnswers, includeAnalysis: options.includeAnalysis },
         });
       } catch (error) {
@@ -1460,30 +1832,36 @@
     }
   }
 
-  function openPrintPage(autoPrint = false) {
+  async function currentQuestionsForExport(panel) {
     const questions = collectQuestions();
     if (!questions.length) {
       alert("没有识别到题目。请确认当前是学习通作业详情页，并且题目已经加载完成。");
-      return;
+      return [];
     }
+    const prepared = await prepareQuestionsForExport(questions, readCommonExportOptions(panel));
+    if (!prepared.length) alert("当前题型筛选后没有题目。");
+    return prepared;
+  }
+
+  async function openPrintPage(autoPrint = false, panel = document) {
+    const questions = await currentQuestionsForExport(panel);
+    if (!questions.length) return;
     const win = window.open("", "_blank");
     if (!win) {
       alert("浏览器拦截了弹窗，请允许此页面打开新窗口。");
       return;
     }
+    const options = readCommonExportOptions(panel);
     win.document.open();
-    win.document.write(buildPrintableHtml(questions));
+    win.document.write(buildPrintableHtml(questions, getPageTitle(), { includeAnalysis: options.includeAnalysis }));
     win.document.close();
     if (autoPrint) setTimeout(() => win.print(), 500);
   }
 
-  function copyPlainText() {
-    const questions = collectQuestions();
-    if (!questions.length) {
-      alert("没有识别到题目。");
-      return;
-    }
-    const text = buildPlainText(questions);
+  async function copyPlainText(panel = document) {
+    const questions = await currentQuestionsForExport(panel);
+    if (!questions.length) return;
+    const text = buildPlainText(questions, readCommonExportOptions(panel));
     if (typeof GM_setClipboard === "function") {
       GM_setClipboard(text, "text");
       alert("已复制整理后的题目和答案。");
@@ -1495,21 +1873,19 @@
     );
   }
 
-  function downloadHtml() {
-    const questions = collectQuestions();
-    if (!questions.length) {
-      alert("没有识别到题目。");
-      return;
-    }
-    const blob = new Blob([buildPrintableHtml(questions)], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${getPageTitle().replace(/[\\/:*?"<>|]/g, "_")}-打印版.html`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+  async function downloadFormat(format, panel = document) {
+    const questions = await currentQuestionsForExport(panel);
+    if (!questions.length) return;
+    const title = getPageTitle();
+    const options = readCommonExportOptions(panel);
+    const blob = new Blob([buildExportContent(format, questions, title, { includeAnalysis: options.includeAnalysis })], {
+      type: exportMimeType(format),
+    });
+    downloadBlob(`${safeFileName(title)}-打印版.${format === "html" ? "html" : format}`, blob);
+  }
+
+  function downloadHtml(panel = document) {
+    return downloadFormat("html", panel);
   }
 
   function renderPanel() {
@@ -1566,6 +1942,37 @@
       return grid;
     };
 
+    const addSelect = (parent, attrs, choices) => {
+      const select = document.createElement("select");
+      Object.entries(attrs).forEach(([key, value]) => {
+        select.dataset[key] = value;
+      });
+      choices.forEach((choice) => {
+        const option = document.createElement("option");
+        option.value = choice.value;
+        option.textContent = choice.label;
+        select.appendChild(option);
+      });
+      parent.appendChild(select);
+      return select;
+    };
+
+    const addCommonExportSettings = (parent, batchMode) => {
+      const exportOptions = addOptionSection(parent, "导出选项");
+      addCheckbox(exportOptions, "显示解析", batchMode ? { batchOption: "include-analysis" } : { exportOption: "include-analysis" }, true);
+      addSelect(exportOptions, { imageMode: "true" }, [
+        { value: "online", label: "图片：在线链接" },
+        { value: "base64", label: "图片：base64" },
+      ]);
+      addSelect(exportOptions, { questionSortMode: "true" }, [
+        { value: "manual", label: "题目：原顺序" },
+        { value: "auto", label: "题目：按题型" },
+      ]);
+      const typeOptions = addOptionSection(parent, "题型筛选");
+      QUESTION_TYPE_FILTERS.forEach((filter) => addCheckbox(typeOptions, filter.label, { questionType: filter.key }, true));
+      return exportOptions;
+    };
+
     if (isWorkList) {
       const row = document.createElement("div");
       row.className = "cx-row";
@@ -1573,10 +1980,16 @@
       row.appendChild(count);
       row.appendChild(addButton("导出全部页", "batch", false));
       row.appendChild(addButton("导出PDF", "batch-pdf", true));
+      row.appendChild(addButton("导出MD", "batch-md", true));
+      row.appendChild(addButton("导出TOML", "batch-toml", true));
       const settingsButton = addButton("⚙", "settings", true);
       settingsButton.className = "cx-icon";
       settingsButton.title = "导出设置";
       row.appendChild(settingsButton);
+      const collapseButton = addButton("－", "collapse", true);
+      collapseButton.className = "cx-icon cx-collapse";
+      collapseButton.title = "收起/展开";
+      row.appendChild(collapseButton);
       panel.appendChild(row);
 
       const options = document.createElement("div");
@@ -1587,12 +2000,12 @@
       addCheckbox(categoryOptions, "未完成", { batchCategory: "unfinished" }, true);
       addCheckbox(categoryOptions, "超时/过期", { batchCategory: "overdue" }, true);
       addCheckbox(categoryOptions, "其他状态", { batchCategory: "unknown" }, false);
-      const exportOptions = addOptionSection(options, "导出选项");
+      const exportOptions = addCommonExportSettings(options, true);
       addCheckbox(exportOptions, "跳过同名", { batchOption: "skip-duplicate-titles" }, true);
       addCheckbox(exportOptions, "无答案标注", { batchOption: "mark-no-answer" }, true);
       addCheckbox(exportOptions, "导出清单", { batchOption: "add-summary" }, true);
-      addCheckbox(exportOptions, "显示解析", { batchOption: "include-analysis" }, true);
       addCheckbox(exportOptions, "打印友好", { batchOption: "print-friendly" }, false);
+      addCheckbox(exportOptions, "手动排序", { batchOption: "manual-work-sort" }, false);
       panel.appendChild(options);
 
       const tools = document.createElement("div");
@@ -1622,13 +2035,27 @@
       row.appendChild(addButton("导出PDF", "pdf", true));
       row.appendChild(addButton("复制文本", "copy", true));
       row.appendChild(addButton("下载HTML", "download", true));
+      row.appendChild(addButton("下载MD", "download-md", true));
+      row.appendChild(addButton("下载TOML", "download-toml", true));
+      const settingsButton = addButton("⚙", "settings", true);
+      settingsButton.className = "cx-icon";
+      settingsButton.title = "导出设置";
+      row.appendChild(settingsButton);
+      const collapseButton = addButton("－", "collapse", true);
+      collapseButton.className = "cx-icon cx-collapse";
+      collapseButton.title = "收起/展开";
+      row.appendChild(collapseButton);
       panel.appendChild(row);
+      const options = document.createElement("div");
+      options.className = "cx-options";
+      addCommonExportSettings(options, false);
+      panel.appendChild(options);
     }
     panel.addEventListener("click", (event) => {
       const check = event.target.closest(".cx-check");
       if (check) {
         check.setAttribute("aria-checked", check.getAttribute("aria-checked") === "true" ? "false" : "true");
-        if ((check.dataset.batchCategory || check.dataset.batchOption === "skip-duplicate-titles") && panel.__cxBatchWorks) {
+        if ((check.dataset.batchCategory || check.dataset.batchOption === "skip-duplicate-titles" || check.dataset.batchOption === "manual-work-sort") && panel.__cxBatchWorks) {
           resetBatchAutoSelection(panel);
         }
         return;
@@ -1636,13 +2063,21 @@
       const button = event.target.closest("button[data-action]");
       if (!button) return;
       const action = button.dataset.action;
-      if (action === "print") openPrintPage();
-      if (action === "pdf") openPrintPage(true);
-      if (action === "copy") copyPlainText();
-      if (action === "download") downloadHtml();
+      if (action === "print") openPrintPage(false, panel);
+      if (action === "pdf") openPrintPage(true, panel);
+      if (action === "copy") copyPlainText(panel);
+      if (action === "download") downloadHtml(panel);
+      if (action === "download-md") downloadFormat("md", panel);
+      if (action === "download-toml") downloadFormat("toml", panel);
       if (action === "batch") batchExportAnswers(button);
       if (action === "batch-pdf") batchExportPdf(button);
+      if (action === "batch-md") batchExportTextFormat(button, "md");
+      if (action === "batch-toml") batchExportTextFormat(button, "toml");
       if (action === "settings") panel.classList.toggle("show-settings");
+      if (action === "collapse") {
+        panel.classList.toggle("is-collapsed");
+        button.textContent = panel.classList.contains("is-collapsed") ? "展开" : "－";
+      }
       if (action === "refresh-list") refreshBatchPreview(panel, button);
       if (action === "select-all") setBatchListSelection(panel, true);
       if (action === "select-none") setBatchListSelection(panel, false);
