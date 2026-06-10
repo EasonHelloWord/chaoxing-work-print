@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通作业题目答案打印整理
 // @namespace    https://chaoxing-print-helper.local/
-// @version      1.5.0
+// @version      1.5.1
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
@@ -74,29 +74,31 @@
         z-index: 2147483647;
         display: flex;
         flex-direction: column;
-        gap: 8px;
-        min-width: 248px;
-        max-width: 360px;
-        padding: 12px;
-        background: rgba(255, 255, 255, .96);
+        gap: 10px;
+        min-width: 280px;
+        max-width: 420px;
+        padding: 14px;
+        background: rgba(255, 255, 255, .98);
         border: 1px solid #d7dde8;
-        border-radius: 8px;
-        box-shadow: 0 8px 24px rgba(20, 35, 60, .16);
+        border-radius: 10px;
+        box-shadow: 0 14px 38px rgba(20, 35, 60, .18);
         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       #${PANEL_ID} .cx-row {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 9px;
         flex-wrap: wrap;
       }
       #${PANEL_ID} button {
         border: 1px solid #2563eb;
-        border-radius: 6px;
+        border-radius: 8px;
         background: #2563eb;
         color: #fff;
-        padding: 7px 10px;
+        padding: 8px 12px;
         cursor: pointer;
+        font: inherit;
+        font-weight: 600;
       }
       #${PANEL_ID} button.secondary {
         background: #fff;
@@ -105,10 +107,10 @@
       #${PANEL_ID} select {
         min-width: 0;
         border: 1px solid #cbd5e1;
-        border-radius: 6px;
+        border-radius: 8px;
         background: #fff;
         color: #334155;
-        padding: 5px 7px;
+        padding: 7px 9px;
         font: inherit;
         font-size: 12px;
       }
@@ -125,11 +127,11 @@
       }
       #${PANEL_ID} .cx-options {
         display: none;
-        gap: 10px;
-        padding: 10px;
+        gap: 12px;
+        padding: 12px;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
-        border-radius: 7px;
+        border-radius: 9px;
       }
       #${PANEL_ID}.show-settings .cx-options {
         display: flex;
@@ -144,11 +146,11 @@
       #${PANEL_ID} .cx-option-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 7px 12px;
+        gap: 9px 14px;
       }
       #${PANEL_ID} .cx-icon {
-        width: 32px;
-        height: 32px;
+        width: 36px;
+        height: 36px;
         padding: 0;
         border-color: #cbd5e1;
         background: #fff;
@@ -228,15 +230,15 @@
         padding: 6px;
         background: #fff;
         border: 1px solid #e2e8f0;
-        border-radius: 7px;
+        border-radius: 9px;
       }
       #${PANEL_ID} .cx-work-item {
         display: grid;
         grid-template-columns: auto auto minmax(0, 1fr) auto;
         gap: 7px;
         align-items: center;
-        padding: 5px 4px;
-        border-radius: 5px;
+        padding: 7px 6px;
+        border-radius: 7px;
         cursor: pointer;
       }
       #${PANEL_ID} .cx-work-item:hover {
@@ -393,18 +395,9 @@
     return questions.filter((question) => selectedTypes.has(questionTypeKey(question)));
   }
 
-  function sortQuestionsForExport(questions, sortMode) {
-    if (sortMode !== "auto") return questions;
-    const order = new Map(QUESTION_TYPE_FILTERS.map((filter, index) => [filter.key, index]));
-    return [...questions].sort((a, b) => {
-      const diff = (order.get(questionTypeKey(a)) || 99) - (order.get(questionTypeKey(b)) || 99);
-      return diff || Number(a.number) - Number(b.number);
-    });
-  }
-
   async function prepareQuestionsForExport(questions, options = {}) {
     const imageCache = new Map();
-    const filtered = sortQuestionsForExport(filterQuestionsByType(questions, options.selectedQuestionTypes), options.questionSortMode);
+    const filtered = filterQuestionsByType(questions, options.selectedQuestionTypes);
     const prepared = [];
     for (const question of filtered) {
       prepared.push({
@@ -1377,6 +1370,41 @@
     return [...ordered, ...works.filter((work) => !orderedKeys.has(workKey(work)))];
   }
 
+  function workNameSortKey(work) {
+    return normalizedTitleKey(work.title) || work.title || "";
+  }
+
+  function workTimeSortKey(work) {
+    const text = `${work.title || ""} ${work.status || ""}`;
+    const dateMatch = text.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+    if (dateMatch) {
+      return Number(dateMatch[1]) * 10000 + Number(dateMatch[2]) * 100 + Number(dateMatch[3]);
+    }
+    const weekMatch = text.match(/第\s*(\d+)\s*[周週]/);
+    if (weekMatch) return Number(weekMatch[1]);
+    const numbers = (text.match(/\d+/g) || []).map(Number);
+    if (numbers.length) return numbers.reduce((sum, value) => sum * 1000 + value, 0);
+    return Number.NaN;
+  }
+
+  function sortWorksForBatch(works, sortMode) {
+    if (!sortMode || sortMode === "original") return works;
+    const sorted = [...works];
+    const desc = sortMode.endsWith("-desc");
+    if (sortMode.startsWith("name-")) {
+      sorted.sort((a, b) => workNameSortKey(a).localeCompare(workNameSortKey(b), "zh-Hans-CN", { numeric: true }));
+    } else if (sortMode.startsWith("time-")) {
+      sorted.sort((a, b) => {
+        const aTime = workTimeSortKey(a);
+        const bTime = workTimeSortKey(b);
+        if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return aTime - bTime;
+        if (Number.isFinite(aTime) !== Number.isFinite(bTime)) return Number.isFinite(aTime) ? -1 : 1;
+        return workNameSortKey(a).localeCompare(workNameSortKey(b), "zh-Hans-CN", { numeric: true });
+      });
+    }
+    return desc ? sorted.reverse() : sorted;
+  }
+
   function defaultSelectedWorkKeys(panel, works, options) {
     if (panel.__cxSelectedWorkKeys) return panel.__cxSelectedWorkKeys;
     const { filtered } = filterWorksForBatch(works, { ...options, selectedWorkKeys: null });
@@ -1394,7 +1422,6 @@
     return {
       includeAnalysis: panel.querySelector('[data-export-option="include-analysis"], [data-batch-option="include-analysis"]')?.getAttribute("aria-checked") !== "false",
       imageMode: panel.querySelector("[data-image-mode]")?.value || "online",
-      questionSortMode: panel.querySelector("[data-question-sort-mode]")?.value || "manual",
       selectedQuestionTypes: readSelectedQuestionTypes(panel),
     };
   }
@@ -1413,11 +1440,11 @@
       selectedCategories,
       selectedWorkKeys,
       selectedWorkOrder,
+      workSortMode: panel.querySelector("[data-work-sort-mode]")?.value || "original",
       skipDuplicateTitles: panel.querySelector('[data-batch-option="skip-duplicate-titles"]')?.getAttribute("aria-checked") === "true",
       markNoAnswer: panel.querySelector('[data-batch-option="mark-no-answer"]')?.getAttribute("aria-checked") === "true",
       addSummary: panel.querySelector('[data-batch-option="add-summary"]')?.getAttribute("aria-checked") === "true",
       printFriendly: panel.querySelector('[data-batch-option="print-friendly"]')?.getAttribute("aria-checked") === "true",
-      manualWorkSort: panel.querySelector('[data-batch-option="manual-work-sort"]')?.getAttribute("aria-checked") === "true",
     };
   }
 
@@ -1443,7 +1470,7 @@
       if (titleKey) seenTitles.add(titleKey);
       filtered.push(work);
     });
-    if (options.manualWorkSort && options.selectedWorkOrder && options.selectedWorkOrder.length) {
+    if (options.selectedWorkOrder && options.selectedWorkOrder.length) {
       const order = new Map(options.selectedWorkOrder.map((key, index) => [key, index]));
       filtered.sort((a, b) => (order.get(workKey(a)) ?? 99999) - (order.get(workKey(b)) ?? 99999));
     }
@@ -1465,14 +1492,14 @@
     const skippedKeys = new Map(skipped.map((item) => [workKey(item.work), item.reason]));
     const filteredKeys = new Set(filtered.map(workKey));
     const selectedKeys = defaultSelectedWorkKeys(panel, works, options);
-    const orderedWorks = orderWorksByKeys(works, panel.__cxManualWorkOrder);
+    const orderedWorks = orderWorksByKeys(sortWorksForBatch(works, options.workSortMode), panel.__cxManualWorkOrder);
     orderedWorks.forEach((work) => {
       const item = document.createElement("div");
       item.className = "cx-work-item";
       item.dataset.workKey = workKey(work);
       item.setAttribute("role", "checkbox");
       item.setAttribute("tabindex", "0");
-      item.draggable = options.manualWorkSort;
+      item.draggable = true;
       item.setAttribute("aria-checked", selectedKeys.has(workKey(work)) && filteredKeys.has(workKey(work)) ? "true" : "false");
       item.title = skippedKeys.get(workKey(work)) || "";
 
@@ -1483,7 +1510,7 @@
       const drag = document.createElement("span");
       drag.className = "cx-drag";
       drag.textContent = "↕";
-      drag.title = options.manualWorkSort ? "拖拽排序" : "勾选手动排序后可拖拽";
+      drag.title = "拖拽排序";
 
       const title = document.createElement("span");
       title.className = "cx-work-title";
@@ -1503,7 +1530,6 @@
         rememberBatchSelection(panel);
       });
       item.addEventListener("dragstart", (event) => {
-        if (!options.manualWorkSort) return;
         item.__cxDragged = true;
         item.classList.add("is-dragging");
         event.dataTransfer.effectAllowed = "move";
@@ -1517,7 +1543,6 @@
         }, 150);
       });
       item.addEventListener("dragover", (event) => {
-        if (!options.manualWorkSort) return;
         event.preventDefault();
         const dragging = list.querySelector(".is-dragging");
         if (!dragging || dragging === item) return;
@@ -1964,10 +1989,6 @@
         { value: "online", label: "图片：在线链接" },
         { value: "base64", label: "图片：base64" },
       ]);
-      addSelect(exportOptions, { questionSortMode: "true" }, [
-        { value: "manual", label: "题目：原顺序" },
-        { value: "auto", label: "题目：按题型" },
-      ]);
       const typeOptions = addOptionSection(parent, "题型筛选");
       QUESTION_TYPE_FILTERS.forEach((filter) => addCheckbox(typeOptions, filter.label, { questionType: filter.key }, true));
       return exportOptions;
@@ -2005,7 +2026,13 @@
       addCheckbox(exportOptions, "无答案标注", { batchOption: "mark-no-answer" }, true);
       addCheckbox(exportOptions, "导出清单", { batchOption: "add-summary" }, true);
       addCheckbox(exportOptions, "打印友好", { batchOption: "print-friendly" }, false);
-      addCheckbox(exportOptions, "手动排序", { batchOption: "manual-work-sort" }, false);
+      addSelect(exportOptions, { workSortMode: "true" }, [
+        { value: "original", label: "排序：自动" },
+        { value: "time-asc", label: "时间：正序" },
+        { value: "time-desc", label: "时间：倒序" },
+        { value: "name-asc", label: "名称：正序" },
+        { value: "name-desc", label: "名称：倒序" },
+      ]);
       panel.appendChild(options);
 
       const tools = document.createElement("div");
@@ -2055,7 +2082,7 @@
       const check = event.target.closest(".cx-check");
       if (check) {
         check.setAttribute("aria-checked", check.getAttribute("aria-checked") === "true" ? "false" : "true");
-        if ((check.dataset.batchCategory || check.dataset.batchOption === "skip-duplicate-titles" || check.dataset.batchOption === "manual-work-sort") && panel.__cxBatchWorks) {
+        if ((check.dataset.batchCategory || check.dataset.batchOption === "skip-duplicate-titles") && panel.__cxBatchWorks) {
           resetBatchAutoSelection(panel);
         }
         return;
@@ -2076,11 +2103,17 @@
       if (action === "settings") panel.classList.toggle("show-settings");
       if (action === "collapse") {
         panel.classList.toggle("is-collapsed");
-        button.textContent = panel.classList.contains("is-collapsed") ? "展开" : "－";
+        button.textContent = panel.classList.contains("is-collapsed") ? "＋" : "－";
       }
       if (action === "refresh-list") refreshBatchPreview(panel, button);
       if (action === "select-all") setBatchListSelection(panel, true);
       if (action === "select-none") setBatchListSelection(panel, false);
+    });
+    panel.addEventListener("change", (event) => {
+      if (!event.target.matches("[data-work-sort-mode]") || !panel.__cxBatchWorks) return;
+      panel.__cxManualWorkOrder = null;
+      renderBatchWorkList(panel, panel.__cxBatchWorks);
+      rememberBatchSelection(panel);
     });
     document.body.appendChild(panel);
   }
