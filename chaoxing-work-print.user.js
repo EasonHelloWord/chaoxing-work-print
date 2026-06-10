@@ -74,10 +74,11 @@
         z-index: 2147483647;
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        min-width: 280px;
-        max-width: 420px;
-        padding: 14px;
+        gap: 8px;
+        width: min(430px, calc(100vw - 28px));
+        max-height: calc(100vh - 36px);
+        overflow: hidden;
+        padding: 12px;
         background: rgba(255, 255, 255, .98);
         border: 1px solid #d7dde8;
         border-radius: 10px;
@@ -85,17 +86,26 @@
         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       #${PANEL_ID} .cx-row {
-        display: flex;
+        display: grid;
+        grid-template-columns: 1fr repeat(2, auto);
         align-items: center;
-        gap: 9px;
-        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #${PANEL_ID} .cx-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      #${PANEL_ID} .cx-actions button {
+        min-width: 0;
+        padding: 8px 9px;
       }
       #${PANEL_ID} button {
         border: 1px solid #2563eb;
         border-radius: 8px;
         background: #2563eb;
         color: #fff;
-        padding: 8px 12px;
+        padding: 7px 10px;
         cursor: pointer;
         font: inherit;
         font-weight: 600;
@@ -127,8 +137,10 @@
       }
       #${PANEL_ID} .cx-options {
         display: none;
-        gap: 12px;
-        padding: 12px;
+        gap: 10px;
+        max-height: min(52vh, 420px);
+        overflow: auto;
+        padding: 10px;
         background: #f8fafc;
         border: 1px solid #e2e8f0;
         border-radius: 9px;
@@ -146,11 +158,11 @@
       #${PANEL_ID} .cx-option-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 9px 14px;
+        gap: 7px 12px;
       }
       #${PANEL_ID} .cx-icon {
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         padding: 0;
         border-color: #cbd5e1;
         background: #fff;
@@ -159,11 +171,11 @@
         line-height: 1;
       }
       #${PANEL_ID}.is-collapsed {
-        min-width: 0;
         width: auto;
         padding: 8px;
       }
       #${PANEL_ID}.is-collapsed .cx-options,
+      #${PANEL_ID}.is-collapsed .cx-actions,
       #${PANEL_ID}.is-collapsed .cx-list-tools,
       #${PANEL_ID}.is-collapsed .cx-work-list,
       #${PANEL_ID}.is-collapsed .cx-row > :not(.cx-collapse) {
@@ -225,7 +237,7 @@
         content: "✓";
       }
       #${PANEL_ID} .cx-work-list {
-        max-height: 220px;
+        max-height: min(32vh, 240px);
         overflow: auto;
         padding: 6px;
         background: #fff;
@@ -1999,10 +2011,6 @@
       row.className = "cx-row";
       count.textContent = `批量导出作业${works.length ? `（当前页${works.length}个）` : ""}`;
       row.appendChild(count);
-      row.appendChild(addButton("导出全部页", "batch", false));
-      row.appendChild(addButton("导出PDF", "batch-pdf", true));
-      row.appendChild(addButton("导出MD", "batch-md", true));
-      row.appendChild(addButton("导出TOML", "batch-toml", true));
       const settingsButton = addButton("⚙", "settings", true);
       settingsButton.className = "cx-icon";
       settingsButton.title = "导出设置";
@@ -2012,6 +2020,14 @@
       collapseButton.title = "收起/展开";
       row.appendChild(collapseButton);
       panel.appendChild(row);
+
+      const actions = document.createElement("div");
+      actions.className = "cx-actions";
+      actions.appendChild(addButton("导出全部页", "batch", false));
+      actions.appendChild(addButton("导出PDF", "batch-pdf", true));
+      actions.appendChild(addButton("导出MD", "batch-md", true));
+      actions.appendChild(addButton("导出TOML", "batch-toml", true));
+      panel.appendChild(actions);
 
       const options = document.createElement("div");
       options.className = "cx-options";
@@ -2058,12 +2074,6 @@
       row.className = "cx-row";
       count.textContent = "已识别 " + questions.length + " 题";
       row.appendChild(count);
-      row.appendChild(addButton("打印版", "print", false));
-      row.appendChild(addButton("导出PDF", "pdf", true));
-      row.appendChild(addButton("复制文本", "copy", true));
-      row.appendChild(addButton("下载HTML", "download", true));
-      row.appendChild(addButton("下载MD", "download-md", true));
-      row.appendChild(addButton("下载TOML", "download-toml", true));
       const settingsButton = addButton("⚙", "settings", true);
       settingsButton.className = "cx-icon";
       settingsButton.title = "导出设置";
@@ -2073,6 +2083,15 @@
       collapseButton.title = "收起/展开";
       row.appendChild(collapseButton);
       panel.appendChild(row);
+      const actions = document.createElement("div");
+      actions.className = "cx-actions";
+      actions.appendChild(addButton("打印版", "print", false));
+      actions.appendChild(addButton("导出PDF", "pdf", true));
+      actions.appendChild(addButton("复制文本", "copy", true));
+      actions.appendChild(addButton("下载HTML", "download", true));
+      actions.appendChild(addButton("下载MD", "download-md", true));
+      actions.appendChild(addButton("下载TOML", "download-toml", true));
+      panel.appendChild(actions);
       const options = document.createElement("div");
       options.className = "cx-options";
       addCommonExportSettings(options, false);
