@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通作业题目答案打印整理
 // @namespace    https://chaoxing-print-helper.local/
-// @version      1.5.1
+// @version      1.5.2
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
@@ -99,6 +99,12 @@
       #${PANEL_ID} .cx-actions button {
         min-width: 0;
         padding: 8px 9px;
+      }
+      #${PANEL_ID} .cx-actions .cx-primary-action {
+        grid-column: 1 / -1;
+      }
+      #${PANEL_ID} .cx-format-select {
+        width: 100%;
       }
       #${PANEL_ID} button {
         border: 1px solid #2563eb;
@@ -1906,7 +1912,7 @@
     }
     navigator.clipboard.writeText(text).then(
       () => alert("已复制整理后的题目和答案。"),
-      () => alert("复制失败，请使用“下载HTML”或“打印版”。")
+      () => alert("复制失败，请使用格式下拉导出 HTML/Markdown/TOML。")
     );
   }
 
@@ -1994,6 +2000,15 @@
       return select;
     };
 
+    const addFormatExportControls = (parent, attrs) => {
+      addSelect(parent, attrs.select, [
+        { value: "html", label: "HTML" },
+        { value: "md", label: "Markdown" },
+        { value: "toml", label: "TOML" },
+      ]).className = "cx-format-select";
+      parent.appendChild(addButton("导出", attrs.action, true));
+    };
+
     const addCommonExportSettings = (parent, batchMode) => {
       const exportOptions = addOptionSection(parent, "导出选项");
       addCheckbox(exportOptions, "显示解析", batchMode ? { batchOption: "include-analysis" } : { exportOption: "include-analysis" }, true);
@@ -2023,10 +2038,10 @@
 
       const actions = document.createElement("div");
       actions.className = "cx-actions";
-      actions.appendChild(addButton("导出全部页", "batch", false));
-      actions.appendChild(addButton("导出PDF", "batch-pdf", true));
-      actions.appendChild(addButton("导出MD", "batch-md", true));
-      actions.appendChild(addButton("导出TOML", "batch-toml", true));
+      const pdfButton = addButton("导出PDF", "batch-pdf", false);
+      pdfButton.className = "cx-primary-action";
+      actions.appendChild(pdfButton);
+      addFormatExportControls(actions, { select: { batchFormat: "true" }, action: "batch-format" });
       panel.appendChild(actions);
 
       const options = document.createElement("div");
@@ -2085,12 +2100,11 @@
       panel.appendChild(row);
       const actions = document.createElement("div");
       actions.className = "cx-actions";
-      actions.appendChild(addButton("打印版", "print", false));
-      actions.appendChild(addButton("导出PDF", "pdf", true));
+      const pdfButton = addButton("导出PDF", "pdf", false);
+      pdfButton.className = "cx-primary-action";
+      actions.appendChild(pdfButton);
       actions.appendChild(addButton("复制文本", "copy", true));
-      actions.appendChild(addButton("下载HTML", "download", true));
-      actions.appendChild(addButton("下载MD", "download-md", true));
-      actions.appendChild(addButton("下载TOML", "download-toml", true));
+      addFormatExportControls(actions, { select: { singleFormat: "true" }, action: "download-format" });
       panel.appendChild(actions);
       const options = document.createElement("div");
       options.className = "cx-options";
@@ -2113,10 +2127,16 @@
       if (action === "pdf") openPrintPage(true, panel);
       if (action === "copy") copyPlainText(panel);
       if (action === "download") downloadHtml(panel);
+      if (action === "download-format") downloadFormat(panel.querySelector("[data-single-format]")?.value || "html", panel);
       if (action === "download-md") downloadFormat("md", panel);
       if (action === "download-toml") downloadFormat("toml", panel);
       if (action === "batch") batchExportAnswers(button);
       if (action === "batch-pdf") batchExportPdf(button);
+      if (action === "batch-format") {
+        const format = panel.querySelector("[data-batch-format]")?.value || "html";
+        if (format === "html") batchExportAnswers(button);
+        else batchExportTextFormat(button, format);
+      }
       if (action === "batch-md") batchExportTextFormat(button, "md");
       if (action === "batch-toml") batchExportTextFormat(button, "toml");
       if (action === "settings") panel.classList.toggle("show-settings");

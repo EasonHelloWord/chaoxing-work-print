@@ -1,6 +1,6 @@
 {
   "name": "chaoxing-work-print-user",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "description": "学习通作业题目、答案、解析整理与批量导出 userscript",
   "scripts": {
