@@ -5,6 +5,10 @@
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
+// @homepageURL  https://github.com/EasonHelloWord/chaoxing-work-print
+// @supportURL   https://github.com/EasonHelloWord/chaoxing-work-print/issues
+// @updateURL    https://raw.githubusercontent.com/EasonHelloWord/chaoxing-work-print/main/chaoxing-work-print.user.js
+// @downloadURL  https://raw.githubusercontent.com/EasonHelloWord/chaoxing-work-print/main/chaoxing-work-print.user.js
 // @match        https://mooc1.chaoxing.com/mooc-ans/mooc2/work/view*
 // @match        https://mooc1.chaoxing.com/mooc-ans/mooc2/work/dowork*
 // @match        https://mooc1.chaoxing.com/mooc-ans/mooc2/work/list*

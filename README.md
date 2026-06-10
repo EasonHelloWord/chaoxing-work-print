@@ -18,13 +18,11 @@
 3. 点击 Raw 或复制脚本内容到 Tampermonkey 新建脚本中保存。
 4. 进入学习通课程作业列表或作业详情页，右下角会出现导出面板。
 
-如果你把本仓库发布到 GitHub，可以在脚本头部补上自己的地址：
-
 ```js
-// @homepageURL  https://github.com/<your-name>/<repo>
-// @supportURL   https://github.com/<your-name>/<repo>/issues
-// @updateURL    https://github.com/<your-name>/<repo>/raw/main/chaoxing-work-print.user.js
-// @downloadURL  https://github.com/<your-name>/<repo>/raw/main/chaoxing-work-print.user.js
+// @homepageURL  https://github.com/EasonHelloWord/chaoxing-work-print
+// @supportURL   https://github.com/EasonHelloWord/chaoxing-work-print/issues
+// @updateURL    https://raw.githubusercontent.com/EasonHelloWord/chaoxing-work-print/main/chaoxing-work-print.user.js
+// @downloadURL  https://raw.githubusercontent.com/EasonHelloWord/chaoxing-work-print/main/chaoxing-work-print.user.js
 ```
 
 ## 使用

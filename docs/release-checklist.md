@@ -16,12 +16,12 @@ git init
 git add .gitignore .editorconfig package.json LICENSE README.md CHANGELOG.md CONTRIBUTING.md docs .github chaoxing-work-print.user.js
 git commit -m "Initial release"
 git branch -M main
-git remote add origin git@github.com:<your-name>/<repo>.git
+git remote add origin git@github.com:EasonHelloWord/chaoxing-work-print.git
 git push -u origin main
 ```
 
 如果使用 HTTPS remote：
 
 ```bash
-git remote add origin https://github.com/<your-name>/<repo>.git
+git remote add origin https://github.com/EasonHelloWord/chaoxing-work-print.git
 ```
