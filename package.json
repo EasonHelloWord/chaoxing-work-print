@@ -1,0 +1,17 @@
+{
+  "name": "chaoxing-work-print-user",
+  "version": "1.3.0",
+  "private": true,
+  "description": "学习通作业题目、答案、解析整理与批量导出 userscript",
+  "scripts": {
+    "check": "node --check chaoxing-work-print.user.js"
+  },
+  "keywords": [
+    "userscript",
+    "tampermonkey",
+    "chaoxing",
+    "xuexitong",
+    "print"
+  ],
+  "license": "MIT"
+}
