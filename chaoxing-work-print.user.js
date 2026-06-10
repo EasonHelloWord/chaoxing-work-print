@@ -70,14 +70,13 @@
       #${PANEL_ID} {
         position: fixed;
         right: 18px;
-        top: 18px;
         bottom: 18px;
         z-index: 2147483647;
         display: flex;
         flex-direction: column;
         gap: 8px;
         width: min(430px, calc(100vw - 28px));
-        max-height: calc(100vh - 36px);
+        max-height: calc(100vh - 72px);
         overflow: hidden;
         padding: 12px;
         background: rgba(255, 255, 255, .98);
@@ -114,8 +113,13 @@
         grid-template-columns: minmax(0, 1fr) 104px;
         gap: 8px;
       }
-      #${PANEL_ID} .cx-single-file-row {
+      #${PANEL_ID} .cx-single-main-row {
+        display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 8px;
+      }
+      #${PANEL_ID} .cx-single-file-row {
+        grid-template-columns: minmax(0, 1fr) 104px;
       }
       #${PANEL_ID} .cx-format-row .cx-format-select {
         width: 100%;
@@ -195,6 +199,7 @@
       }
       #${PANEL_ID}.is-collapsed {
         width: auto;
+        height: auto;
         padding: 8px;
       }
       #${PANEL_ID}.is-collapsed .cx-options,
@@ -2120,17 +2125,19 @@
       panel.appendChild(row);
       const actions = document.createElement("div");
       actions.className = "cx-actions";
+      const mainRow = document.createElement("div");
+      mainRow.className = "cx-single-main-row";
       const pdfButton = addButton("导出PDF", "pdf", false);
-      pdfButton.className = "cx-primary-action";
-      actions.appendChild(pdfButton);
-      addSelect(actions, { singleFormat: "true" }, [
+      mainRow.appendChild(pdfButton);
+      mainRow.appendChild(addButton("复制文本", "copy", true));
+      actions.appendChild(mainRow);
+      const fileRow = document.createElement("div");
+      fileRow.className = "cx-format-row cx-single-file-row";
+      addSelect(fileRow, { singleFormat: "true" }, [
         { value: "html", label: "HTML" },
         { value: "md", label: "Markdown" },
         { value: "toml", label: "TOML" },
       ]).className = "cx-format-select";
-      const fileRow = document.createElement("div");
-      fileRow.className = "cx-format-row cx-single-file-row";
-      fileRow.appendChild(addButton("复制文本", "copy", true));
       fileRow.appendChild(addButton("导出文件", "download-format", true));
       actions.appendChild(fileRow);
       panel.appendChild(actions);
