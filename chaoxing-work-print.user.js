@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通作业题目答案打印整理
 // @namespace    https://chaoxing-print-helper.local/
-// @version      1.5.2
+// @version      1.5.3
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
@@ -44,6 +44,8 @@
   const STYLE_ID = "cx-print-helper-style";
   const PANEL_ID = "cx-print-helper-panel";
   const NO_ANSWER_MARK = "无答案";
+  const DETAIL_CACHE_VERSION = "v1";
+  const DETAIL_CACHE_TTL = 2 * 60 * 60 * 1000;
   const BATCH_CATEGORY_LABELS = {
     answered: "有答案",
     reviewing: "待批阅",
@@ -329,6 +331,11 @@
         accent-color: #2563eb;
         cursor: pointer;
       }
+      @media print {
+        #${PANEL_ID} {
+          display: none !important;
+        }
+      }
     `;
     document.head.appendChild(style);
   }
@@ -338,6 +345,68 @@
       .replace(/\u00a0/g, " ")
       .replace(/[ \t\r\n]+/g, " ")
       .trim();
+  }
+
+  function storageGet(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {}
+  }
+
+  function sessionGet(key) {
+    try {
+      return sessionStorage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function sessionSet(key, value) {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch (error) {}
+  }
+
+  function sessionRemove(key) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch (error) {}
+  }
+
+  function writeWindowMessage(win, title, message) {
+    if (!win) return;
+    win.document.open();
+    win.document.write(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    body { margin: 0; padding: 32px; color: #1f2937; font: 14px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    h1 { margin: 0 0 10px; font-size: 20px; }
+    p { margin: 0; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  <p>${escapeHtml(message)}</p>
+</body>
+</html>`);
+    win.document.close();
+  }
+
+  function openExportWindow(title, message) {
+    const win = window.open("", "_blank");
+    if (win) writeWindowMessage(win, title, message || "正在整理作业内容，请稍候...");
+    return win;
   }
 
   function absolutizeUrl(url) {
@@ -782,6 +851,7 @@
       body { background: #fff; }
       .page { max-width: none; padding: 0; }
       .toolbar { display: none; }
+      #${PANEL_ID} { display: none !important; }
       .batch-cover { display: none; }
       .batch-print .work-section { page-break-before: always; break-before: page; }
       .batch-print .work-section:first-of-type { page-break-before: auto; break-before: auto; }
@@ -1218,10 +1288,17 @@
   }
 
   async function collectWorksForBatch() {
+    const cached = readCachedWorkList();
+    if (cached) return cached;
+
     const domWorks = parseWorkList();
 
     const listUrl = getCourseWorkListUrl();
-    if (!listUrl && domWorks.length) return uniqueWorks(domWorks);
+    if (!listUrl && domWorks.length) {
+      const works = uniqueWorks(domWorks);
+      writeCachedWorkList(works);
+      return works;
+    }
     if (!listUrl) return [];
 
     const allWorks = [...domWorks];
@@ -1236,10 +1313,15 @@
       allWorks.push(...parseWorkList(pageDoc));
     }
 
-    return uniqueWorks(allWorks);
+    const works = uniqueWorks(allWorks);
+    writeCachedWorkList(works);
+    return works;
   }
 
   async function fetchWorkDetail(work) {
+    const cached = readCachedWorkDetail(work);
+    if (cached) return cached;
+
     let lastTitle = work.title;
     let lastError = "";
     const urls = workDetailUrlCandidates(work);
@@ -1254,12 +1336,14 @@
         const questions = collectQuestionsFromRoot(doc);
         lastTitle = getPageTitle(doc) || lastTitle;
         if (questions.length) {
-          return {
+          const result = {
             ...work,
             url,
             title: lastTitle,
             questions,
           };
+          writeCachedWorkDetail(work, result);
+          return result;
         }
         extractWorkRedirectUrls(html, url).forEach((nextUrl) => {
           if (!tried.has(nextUrl) && !urls.includes(nextUrl)) urls.push(nextUrl);
@@ -1395,11 +1479,102 @@
     return work.workId || work.url || work.title;
   }
 
+  function courseStorageId() {
+    const params = new URLSearchParams(location.search);
+    const courseId = getCourseValue("courseid") || getCourseValue("courseId") || params.get("courseid") || params.get("courseId") || "";
+    const classId = getCourseValue("clazzid") || getCourseValue("classId") || params.get("clazzid") || params.get("classId") || "";
+    const cpi = getCourseValue("cpi") || params.get("cpi") || "";
+    return [courseId, classId, cpi].filter(Boolean).join(":") || location.origin + location.pathname;
+  }
+
+  function courseStorageKey(name) {
+    return `cx-work-print:${name}:${courseStorageId()}`;
+  }
+
+  function workDetailCacheKey(work) {
+    return `cx-work-print:detail:${DETAIL_CACHE_VERSION}:${courseStorageId()}:${workKey(work)}:${work.answerId || ""}`;
+  }
+
+  function workListCacheKey() {
+    return `cx-work-print:work-list:${DETAIL_CACHE_VERSION}:${courseStorageId()}`;
+  }
+
+  function readCachedWorkList() {
+    const raw = sessionGet(workListCacheKey());
+    if (!raw) return null;
+    try {
+      const cached = JSON.parse(raw);
+      if (!cached || !Array.isArray(cached.works) || Date.now() - cached.cachedAt > DETAIL_CACHE_TTL) return null;
+      return cached.works;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeCachedWorkList(works) {
+    sessionSet(workListCacheKey(), JSON.stringify({ cachedAt: Date.now(), works }));
+  }
+
+  function clearCachedWorkList() {
+    sessionRemove(workListCacheKey());
+  }
+
+  function readCachedWorkDetail(work) {
+    const raw = sessionGet(workDetailCacheKey(work));
+    if (!raw) return null;
+    try {
+      const cached = JSON.parse(raw);
+      if (!cached || !cached.questions || Date.now() - cached.cachedAt > DETAIL_CACHE_TTL) return null;
+      return {
+        ...work,
+        url: cached.url || work.url,
+        title: cached.title || work.title,
+        questions: cached.questions,
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeCachedWorkDetail(work, result) {
+    sessionSet(workDetailCacheKey(work), JSON.stringify({
+      cachedAt: Date.now(),
+      url: result.url,
+      title: result.title,
+      questions: result.questions,
+    }));
+  }
+
+  function readBatchSortState() {
+    const raw = storageGet(courseStorageKey("batch-sort"));
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveBatchSortState(panel) {
+    const order = [...panel.querySelectorAll("[data-work-key]")].map((item) => item.dataset.workKey);
+    const sortMode = panel.querySelector("[data-work-sort-mode]")?.value || "original";
+    storageSet(courseStorageKey("batch-sort"), JSON.stringify({ sortMode, order }));
+  }
+
+  function applyBatchSortState(panel) {
+    const state = readBatchSortState();
+    if (!state) return;
+    const select = panel.querySelector("[data-work-sort-mode]");
+    if (select && state.sortMode) select.value = state.sortMode;
+    if (Array.isArray(state.order)) panel.__cxManualWorkOrder = state.order;
+  }
+
   function rememberBatchSelection(panel) {
     const items = [...panel.querySelectorAll('[data-work-key]')];
     if (!items.length) return;
     panel.__cxSelectedWorkKeys = new Set(items.filter((item) => item.getAttribute("aria-checked") === "true").map((item) => item.dataset.workKey));
     panel.__cxManualWorkOrder = items.map((item) => item.dataset.workKey);
+    saveBatchSortState(panel);
   }
 
   function orderWorksByKeys(works, keys) {
@@ -1623,7 +1798,10 @@
     if (list) list.textContent = "正在读取全部页作业...";
     if (listCount) listCount.textContent = "";
     try {
-      if (button) window.__CX_PRINT_BATCH_WORKS_CACHE__ = null;
+      if (button) {
+        window.__CX_PRINT_BATCH_WORKS_CACHE__ = null;
+        clearCachedWorkList();
+      }
       if (!window.__CX_PRINT_BATCH_WORKS_CACHE__ && !window.__CX_PRINT_BATCH_WORKS_PROMISE__) {
         window.__CX_PRINT_BATCH_WORKS_PROMISE__ = collectWorksForBatch().then((works) => {
           window.__CX_PRINT_BATCH_WORKS_CACHE__ = works;
@@ -1844,10 +2022,16 @@
 
   async function batchExportPdf(button) {
     const panel = button.closest(`#${PANEL_ID}`) || document;
+    const win = openExportWindow("正在生成 PDF", "正在读取作业并生成打印页面，请稍候...");
+    if (!win) {
+      alert("浏览器拦截了弹窗，请允许此页面打开新窗口后再试。");
+      return;
+    }
     let prepared;
     try {
       prepared = await prepareBatchWorks(panel, button);
     } catch (error) {
+      writeWindowMessage(win, "生成失败", error.message || String(error));
       alert(error.message || String(error));
       return;
     }
@@ -1877,17 +2061,13 @@
     }
     restoreBatchButton(button, oldText);
     if (!items.length) {
+      writeWindowMessage(win, "没有成功生成 PDF 内容", failures.length ? failures.join("\n") : "没有符合当前条件的作业。");
       alert("没有成功生成 PDF 内容。" + (failures.length ? "\n" + failures.join("\n") : ""));
       return;
     }
     const html = buildBatchPrintableHtml(items, document.title || "学习通作业批量导出", {
       printFriendly: options.printFriendly,
     });
-    const win = window.open("", "_blank");
-    if (!win) {
-      alert("浏览器拦截了弹窗，请允许此页面打开新窗口。");
-      return;
-    }
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -1909,11 +2089,14 @@
   }
 
   async function openPrintPage(autoPrint = false, panel = document) {
-    const questions = await currentQuestionsForExport(panel);
-    if (!questions.length) return;
-    const win = window.open("", "_blank");
+    const win = openExportWindow("正在生成 PDF", "正在整理当前作业，请稍候...");
     if (!win) {
-      alert("浏览器拦截了弹窗，请允许此页面打开新窗口。");
+      alert("浏览器拦截了弹窗，请允许此页面打开新窗口后再试。");
+      return;
+    }
+    const questions = await currentQuestionsForExport(panel);
+    if (!questions.length) {
+      writeWindowMessage(win, "没有识别到题目", "请确认当前是学习通作业详情页，并且题目已经加载完成。");
       return;
     }
     const options = readCommonExportOptions(panel);
@@ -2090,6 +2273,7 @@
         { value: "name-desc", label: "名称：倒序" },
       ]);
       panel.appendChild(options);
+      applyBatchSortState(panel);
 
       const tools = document.createElement("div");
       tools.className = "cx-list-tools";
