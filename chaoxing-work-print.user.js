@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通作业题目答案打印整理
 // @namespace    https://chaoxing-print-helper.local/
-// @version      1.5.3
+// @version      1.5.8
 // @description  在学习通作业详情页整理题目、选项、正确答案和解析，生成适合打印的页面。
 // @author       Eason Jan
 // @license      MIT
@@ -21,6 +21,9 @@
 // @match        https://*.chaoxing.com/mooc-ans/mooc2/work/dowork*
 // @match        https://*.chaoxing.com/mooc-ans/mooc2/work/list*
 // @match        https://*.chaoxing.com/mooc2/work/list*
+// @match        https://*.chaoxing.com/exam-ans/mooc2/exam/exam-list*
+// @match        https://*.chaoxing.com/exam-ans/exam/test/look*
+// @match        https://*.chaoxing.com/exam-ans/exam/test/reVersionPaperMarkContentNew*
 // @match        https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/stu*
 // @grant        GM_setClipboard
 // @grant        GM_xmlhttpRequest
@@ -31,13 +34,11 @@
 // @connect      mooc1.chaoxing.com
 // @connect      mooc1-1.chaoxing.com
 // @run-at       document-idle
-// @noframes
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  if (window.top !== window.self) return;
   if (window.__CHAOXING_PRINT_HELPER_LOADED__) return;
   window.__CHAOXING_PRINT_HELPER_LOADED__ = true;
 
@@ -202,6 +203,8 @@
       #${PANEL_ID}.is-collapsed {
         width: auto;
         height: auto;
+        max-height: none;
+        overflow: visible;
         padding: 8px;
       }
       #${PANEL_ID}.is-collapsed .cx-options,
@@ -217,6 +220,7 @@
       #${PANEL_ID} .cx-list-tools {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
         color: #64748b;
         font-size: 12px;
@@ -227,6 +231,14 @@
         color: #2563eb;
         padding: 2px 4px;
         font-size: 12px;
+      }
+      #${PANEL_ID} .cx-inline-check {
+        padding: 2px 4px;
+        white-space: nowrap;
+      }
+      #${PANEL_ID} .cx-inline-check .cx-box {
+        width: 13px;
+        height: 13px;
       }
       #${PANEL_ID} .cx-check {
         display: inline-flex;
@@ -409,10 +421,10 @@
     return win;
   }
 
-  function absolutizeUrl(url) {
+  function absolutizeUrl(url, baseUrl = location.href) {
     if (!url) return "";
     try {
-      return new URL(url, location.href).href;
+      return new URL(url, baseUrl).href;
     } catch (error) {
       return url;
     }
@@ -922,6 +934,7 @@
 
   function buildBatchPrintableHtml(items, title, options = {}) {
     const generatedAt = new Date().toLocaleString();
+    const itemLabel = options.itemLabel || "作业";
     const sections = items.map((item) => `
       <section class="work-section">
         <h2 class="work-title">${escapeHtml(item.title)}</h2>
@@ -947,7 +960,7 @@
   <main class="page">
     <header class="batch-cover">
       <h1>${escapeHtml(title)}</h1>
-      <div class="meta">共 ${items.length} 个作业 · ${questionCount} 题 · 生成时间：${escapeHtml(generatedAt)}${options.printFriendly ? " · 已启用打印友好空白页" : ""}</div>
+      <div class="meta">共 ${items.length} 个${escapeHtml(itemLabel)} · ${questionCount} 题 · 生成时间：${escapeHtml(generatedAt)}${options.printFriendly ? " · 已启用打印友好空白页" : ""}</div>
     </header>
     <div class="toolbar">
       <button onclick="window.print()">打印/保存 PDF</button>
@@ -1054,8 +1067,8 @@
     return "text/html;charset=utf-8";
   }
 
-  function normalizeWorkUrl(rawUrl) {
-    const url = new URL(absolutizeUrl(rawUrl), location.href);
+  function normalizeWorkUrl(rawUrl, baseUrl = location.href) {
+    const url = new URL(absolutizeUrl(rawUrl, baseUrl), baseUrl);
     const answerId = url.searchParams.get("answerId") || "";
     if (url.pathname === "/mooc-ans/mooc2/work/task") {
       url.pathname = answerId && answerId !== "0" ? "/mooc-ans/mooc2/work/view" : "/mooc-ans/mooc2/work/dowork";
@@ -1095,6 +1108,39 @@
     return urls;
   }
 
+  function examDetailUrlCandidates(exam) {
+    const urls = [];
+    const push = (url) => {
+      if (!url) return;
+      try {
+        const href = new URL(url, location.href).href;
+        if (!urls.includes(href)) urls.push(href);
+      } catch (error) {
+        if (!urls.includes(url)) urls.push(url);
+      }
+    };
+    push(buildExamDetailUrl(exam));
+    push(exam.url);
+    push(exam.rawUrl);
+    push(buildExamLookUrl(exam));
+    [exam.url, exam.rawUrl].forEach((source) => {
+      if (!source) return;
+      const url = new URL(source, location.href);
+      const ctx = {
+        ...exam,
+        courseId: exam.courseId || url.searchParams.get("courseId") || url.searchParams.get("courseid") || "",
+        classId: exam.classId || url.searchParams.get("classId") || url.searchParams.get("clazzid") || "",
+        cpi: exam.cpi || url.searchParams.get("cpi") || "",
+        openc: exam.openc || url.searchParams.get("openc") || "",
+        examId: exam.examId || url.searchParams.get("examId") || "",
+        answerId: exam.answerId || url.searchParams.get("examAnswerId") || url.searchParams.get("id") || "",
+      };
+      push(buildExamDetailUrl(ctx));
+      push(buildExamLookUrl(ctx));
+    });
+    return urls;
+  }
+
   function extractWorkRedirectUrls(html, baseUrl) {
     const urls = [];
     const push = (url) => {
@@ -1113,6 +1159,7 @@
       /\/\/[^"'<>\\\s]+\/mooc-ans\/mooc2\/work\/(?:dowork|view|task)\?[^"'<>\\\s]+/g,
       /\/mooc-ans\/mooc2\/work\/(?:dowork|view|task)\?[^"'<>\\\s]+/g,
       /\/mooc2\/work\/(?:dowork|view|task)\?[^"'<>\\\s]+/g,
+      /\/exam-ans\/exam\/test\/(?:look|reVersionPaperMarkContentNew)\?[^"'<>\\\s]+/g,
     ];
     patterns.forEach((pattern) => {
       let match;
@@ -1150,24 +1197,138 @@
       .toLowerCase();
   }
 
-  function parseWorkList(root = document) {
+  function parseWorkList(root = document, baseUrl = location.href) {
     return [...root.querySelectorAll('li[onclick*="goTask"][data]')].map((item) => {
       const rawUrl = item.getAttribute("data") || "";
-      const url = normalizeWorkUrl(rawUrl);
+      const url = normalizeWorkUrl(rawUrl, baseUrl);
       const label = textFromNode({ innerText: item.getAttribute("aria-label") || "" });
       const params = new URL(url).searchParams;
       const workId = params.get("workId") || "";
       const answerId = params.get("answerId") || "";
       const status = detectWorkStatus(label);
       const title = cleanText(label.split(";")[0]) || textFromNode(item.querySelector(".workTit, .overHidden2, h3, p")) || "未命名作业";
-      return { title, url, rawUrl: absolutizeUrl(rawUrl), workId, answerId, status };
+      return { kind: "work", title, url, rawUrl: absolutizeUrl(rawUrl, baseUrl), workId, answerId, status };
     }).filter((work) => work.url && work.workId);
+  }
+
+  function isExamListPage(root = document) {
+    return /\/exam-ans\/mooc2\/exam\/exam-list/.test(location.pathname) || Boolean(root.querySelector('[onclick*="viewExamAnswer"]'));
+  }
+
+  function isCourseHomePage() {
+    return /\/mooc2-ans\/mycourse\/stu/.test(location.pathname);
+  }
+
+  function isContentPagePath(pathname = location.pathname) {
+    return /\/(?:mooc-ans\/mooc2\/work|mooc2\/work|exam-ans\/(?:mooc2\/exam|exam\/test))\//.test(pathname);
+  }
+
+  function shouldSuppressFramePanel() {
+    return window.top !== window.self;
+  }
+
+  function accessibleBatchSources() {
+    const sources = [{ root: document, href: location.href }];
+    if (window.top !== window.self) return sources;
+    [...document.querySelectorAll("iframe")].forEach((frame) => {
+      const src = frame.getAttribute("src") || "";
+      try {
+        const doc = frame.contentDocument;
+        if (!doc) return;
+        const href = doc.location?.href || absolutizeUrl(src);
+        if (!href || href === "about:blank") return;
+        if (!isContentPagePath(new URL(href, location.href).pathname) && !doc.querySelector(".questionLi, li[onclick*='goTask'][data], [onclick*='viewExamAnswer']")) return;
+        sources.push({ root: doc, href });
+      } catch (error) {}
+    });
+    return sources;
+  }
+
+  function getRootValue(root, id) {
+    const node = root.getElementById ? root.getElementById(id) : root.querySelector(`#${id}`);
+    return node ? node.value || "" : "";
+  }
+
+  function pageSearchParam(name, href = location.href) {
+    try {
+      return new URL(href, location.href).searchParams.get(name) || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function examContext(root = document, href = location.href) {
+    return {
+      courseId: getRootValue(root, "courseId") || getRootValue(root, "courseid") || pageSearchParam("courseId", href) || pageSearchParam("courseid", href),
+      classId: getRootValue(root, "classId") || getRootValue(root, "clazzid") || pageSearchParam("classId", href) || pageSearchParam("clazzid", href),
+      cpi: getRootValue(root, "cpi") || pageSearchParam("cpi", href),
+      openc: getRootValue(root, "openc") || pageSearchParam("openc", href),
+      examId: getRootValue(root, "examId") || pageSearchParam("examId", href),
+      answerId: getRootValue(root, "answerId") || pageSearchParam("examAnswerId", href) || pageSearchParam("id", href),
+    };
+  }
+
+  function buildExamDetailUrl(exam) {
+    if (!exam.answerId) return "";
+    const params = new URLSearchParams({
+      courseId: exam.courseId || "",
+      classId: exam.classId || "",
+      p: "1",
+      id: exam.answerId,
+      ut: "s",
+      cpi: exam.cpi || "",
+      newMooc: "true",
+    });
+    if (exam.openc) params.set("openc", exam.openc);
+    return `https://mooc1.chaoxing.com/exam-ans/exam/test/reVersionPaperMarkContentNew?${params.toString()}`;
+  }
+
+  function buildExamLookUrl(exam) {
+    if (!exam.examId || !exam.answerId) return "";
+    const params = new URLSearchParams({
+      courseId: exam.courseId || "",
+      classId: exam.classId || "",
+      examId: exam.examId,
+      examAnswerId: exam.answerId,
+      cpi: exam.cpi || "",
+    });
+    return `https://mooc1.chaoxing.com/exam-ans/exam/test/look?${params.toString()}`;
+  }
+
+  function parseExamList(root = document, baseUrl = location.href) {
+    const ctx = examContext(root, baseUrl);
+    return [...root.querySelectorAll('[onclick*="viewExamAnswer"]')].map((item) => {
+      const onclick = item.getAttribute("onclick") || "";
+      const match = onclick.match(/viewExamAnswer\(\s*['"]?(\d+)['"]?\s*,\s*['"]?(\d+)['"]?\s*\)/);
+      if (!match) return null;
+      const examId = match[1];
+      const answerId = match[2];
+      const title = textFromNode(item.querySelector(".overHidden2, .right-content p, p")) || "未命名考试";
+      const status = detectWorkStatus(textFromNode(item.querySelector(".status")) || textFromNode(item)) || "已完成";
+      const exam = {
+        kind: "exam",
+        title,
+        status,
+        examId,
+        answerId,
+        examAnswerId: answerId,
+        courseId: ctx.courseId,
+        classId: ctx.classId,
+        cpi: ctx.cpi,
+        openc: ctx.openc,
+      };
+      return {
+        ...exam,
+        url: buildExamDetailUrl(exam),
+        rawUrl: buildExamLookUrl(exam),
+      };
+    }).filter((exam) => exam && exam.answerId);
   }
 
   function uniqueWorks(works) {
     const seen = new Set();
     return works.filter((work) => {
-      const key = work.workId || work.url;
+      const key = workKey(work);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -1191,9 +1352,45 @@
       url.searchParams.delete("stuenc");
     }
     url.searchParams.set("status", url.searchParams.get("status") || "0");
-    url.searchParams.set("topicId", url.searchParams.get("topicId") || "0");
+    if (/\/work\/list/.test(url.pathname)) url.searchParams.set("topicId", url.searchParams.get("topicId") || "0");
     url.searchParams.set("pageNum", String(pageNum));
     return url.href;
+  }
+
+  function getCourseExamListUrl(root = document, href = location.href) {
+    let url;
+    try {
+      url = new URL(href, location.href);
+    } catch (error) {
+      url = new URL(location.href);
+    }
+    if (/\/exam-ans\/mooc2\/exam\/exam-list/.test(url.pathname)) {
+      return url.href;
+    }
+    const courseId = getRootValue(root, "courseid") || getRootValue(root, "courseId") || url.searchParams.get("courseid") || url.searchParams.get("courseId") || "";
+    const classId = getRootValue(root, "clazzid") || getRootValue(root, "classId") || url.searchParams.get("clazzid") || url.searchParams.get("classId") || "";
+    const cpi = getRootValue(root, "cpi") || url.searchParams.get("cpi") || "";
+    const stuenc = getRootValue(root, "enc") || url.searchParams.get("enc") || url.searchParams.get("stuenc") || "";
+    const enc = getRootValue(root, "examEnc") || "";
+    const openc = getRootValue(root, "openc") || url.searchParams.get("openc") || "";
+    const t = getRootValue(root, "t") || url.searchParams.get("t") || Date.now();
+    if (!courseId || !classId || !cpi || !stuenc || !enc) return "";
+    const params = new URLSearchParams({
+      courseid: courseId,
+      clazzid: classId,
+      cpi,
+      ut: "s",
+      t,
+      stuenc,
+      enc,
+    });
+    if (openc) params.set("openc", openc);
+    return "https://mooc1.chaoxing.com/exam-ans/mooc2/exam/exam-list?" + params.toString();
+  }
+
+  function currentBatchKind() {
+    if (isCourseHomePage()) return "mixed";
+    return isExamListPage() ? "exam" : "work";
   }
 
   function getCourseValue(id) {
@@ -1201,17 +1398,23 @@
     return node ? node.value || "" : "";
   }
 
-  function getCourseWorkListUrl() {
-    if (/\/work\/list/.test(location.pathname)) {
-      return location.href;
+  function getCourseWorkListUrl(root = document, href = location.href) {
+    let currentUrl;
+    try {
+      currentUrl = new URL(href, location.href);
+    } catch (error) {
+      currentUrl = new URL(location.href);
+    }
+    if (/\/work\/list/.test(currentUrl.pathname)) {
+      return currentUrl.href;
     }
 
-    const courseId = getCourseValue("courseid") || getCourseValue("courseId");
-    const classId = getCourseValue("clazzid") || getCourseValue("classId");
-    const cpi = getCourseValue("cpi");
-    const stuenc = getCourseValue("enc");
-    const enc = getCourseValue("workEnc");
-    const t = getCourseValue("t") || Date.now();
+    const courseId = getRootValue(root, "courseid") || getRootValue(root, "courseId") || currentUrl.searchParams.get("courseid") || currentUrl.searchParams.get("courseId") || "";
+    const classId = getRootValue(root, "clazzid") || getRootValue(root, "classId") || currentUrl.searchParams.get("clazzid") || currentUrl.searchParams.get("classId") || "";
+    const cpi = getRootValue(root, "cpi") || currentUrl.searchParams.get("cpi") || "";
+    const stuenc = getRootValue(root, "enc") || currentUrl.searchParams.get("enc") || currentUrl.searchParams.get("stuenc") || "";
+    const enc = getRootValue(root, "workEnc");
+    const t = getRootValue(root, "t") || currentUrl.searchParams.get("t") || Date.now();
     if (!courseId || !classId || !cpi || !stuenc || !enc) return "";
     const params = new URLSearchParams({
       courseId,
@@ -1291,26 +1494,37 @@
     const cached = readCachedWorkList();
     if (cached) return cached;
 
-    const domWorks = parseWorkList();
+    const sources = accessibleBatchSources();
+    const allWorks = [];
+    const listSources = [];
+    const addListSource = (kind, url) => {
+      if (!url) return;
+      const href = absolutizeUrl(url);
+      if (!listSources.some((item) => item.kind === kind && item.url === href)) {
+        listSources.push({ kind, url: href });
+      }
+    };
 
-    const listUrl = getCourseWorkListUrl();
-    if (!listUrl && domWorks.length) {
-      const works = uniqueWorks(domWorks);
-      writeCachedWorkList(works);
-      return works;
-    }
-    if (!listUrl) return [];
+    sources.forEach((source) => {
+      const href = source.href || location.href;
+      allWorks.push(...parseWorkList(source.root, href));
+      allWorks.push(...parseExamList(source.root, href));
+      addListSource("work", getCourseWorkListUrl(source.root, href));
+      addListSource("exam", getCourseExamListUrl(source.root, href));
+    });
 
-    const allWorks = [...domWorks];
-    const firstHtml = await requestText(buildListPageUrl(listUrl, 1));
-    const firstDoc = new DOMParser().parseFromString(firstHtml, "text/html");
-    allWorks.push(...parseWorkList(firstDoc));
+    for (const source of listSources) {
+      const firstHtml = await requestText(buildListPageUrl(source.url, 1));
+      const firstDoc = new DOMParser().parseFromString(firstHtml, "text/html");
+      allWorks.push(...(source.kind === "exam" ? parseExamList(firstDoc, source.url) : parseWorkList(firstDoc, source.url)));
 
-    const totalPages = parseTotalListPages(firstDoc);
-    for (let pageNum = 2; pageNum <= totalPages; pageNum += 1) {
-      const pageHtml = await requestText(buildListPageUrl(listUrl, pageNum));
-      const pageDoc = new DOMParser().parseFromString(pageHtml, "text/html");
-      allWorks.push(...parseWorkList(pageDoc));
+      const totalPages = parseTotalListPages(firstDoc);
+      for (let pageNum = 2; pageNum <= totalPages; pageNum += 1) {
+        const pageUrl = buildListPageUrl(source.url, pageNum);
+        const pageHtml = await requestText(pageUrl);
+        const pageDoc = new DOMParser().parseFromString(pageHtml, "text/html");
+        allWorks.push(...(source.kind === "exam" ? parseExamList(pageDoc, pageUrl) : parseWorkList(pageDoc, pageUrl)));
+      }
     }
 
     const works = uniqueWorks(allWorks);
@@ -1324,7 +1538,7 @@
 
     let lastTitle = work.title;
     let lastError = "";
-    const urls = workDetailUrlCandidates(work);
+    const urls = work.kind === "exam" ? examDetailUrlCandidates(work) : workDetailUrlCandidates(work);
     const tried = new Set();
     for (let index = 0; index < urls.length; index += 1) {
       const url = urls[index];
@@ -1476,7 +1690,8 @@
   }
 
   function workKey(work) {
-    return work.workId || work.url || work.title;
+    const key = work.workId || work.examAnswerId || work.answerId || work.examId || work.url || work.title;
+    return `${work.kind || "work"}:${key}`;
   }
 
   function courseStorageId() {
@@ -1484,7 +1699,8 @@
     const courseId = getCourseValue("courseid") || getCourseValue("courseId") || params.get("courseid") || params.get("courseId") || "";
     const classId = getCourseValue("clazzid") || getCourseValue("classId") || params.get("clazzid") || params.get("classId") || "";
     const cpi = getCourseValue("cpi") || params.get("cpi") || "";
-    return [courseId, classId, cpi].filter(Boolean).join(":") || location.origin + location.pathname;
+    const examId = getCourseValue("examId") || params.get("examId") || "";
+    return [courseId, classId, cpi, examId].filter(Boolean).join(":") || location.origin + location.pathname;
   }
 
   function courseStorageKey(name) {
@@ -1495,8 +1711,8 @@
     return `cx-work-print:detail:${DETAIL_CACHE_VERSION}:${courseStorageId()}:${workKey(work)}:${work.answerId || ""}`;
   }
 
-  function workListCacheKey() {
-    return `cx-work-print:work-list:${DETAIL_CACHE_VERSION}:${courseStorageId()}`;
+  function workListCacheKey(kind = currentBatchKind()) {
+    return `cx-work-print:${kind}-list:${DETAIL_CACHE_VERSION}:${courseStorageId()}`;
   }
 
   function readCachedWorkList() {
@@ -1645,6 +1861,9 @@
     const selectedCategories = new Set(
       [...panel.querySelectorAll('[data-batch-category][aria-checked="true"]')].map((input) => input.dataset.batchCategory)
     );
+    const selectedKinds = new Set(
+      [...panel.querySelectorAll('[data-batch-kind][aria-checked="true"]')].map((input) => input.dataset.batchKind)
+    );
     const selectedInputs = [...panel.querySelectorAll('[data-work-key]')];
     const selectedWorkKeys = selectedInputs.length
       ? new Set(selectedInputs.filter((input) => input.getAttribute("aria-checked") === "true").map((input) => input.dataset.workKey))
@@ -1653,6 +1872,7 @@
     return {
       ...readCommonExportOptions(panel),
       selectedCategories,
+      selectedKinds,
       selectedWorkKeys,
       selectedWorkOrder,
       workSortMode: panel.querySelector("[data-work-sort-mode]")?.value || "original",
@@ -1672,12 +1892,16 @@
         skipped.push({ work, reason: "用户未勾选" });
         return;
       }
+      if (options.selectedKinds && options.selectedKinds.size && !options.selectedKinds.has(work.kind || "work")) {
+        skipped.push({ work, reason: `未显示${work.kind === "exam" ? "考试" : "作业"}` });
+        return;
+      }
       const category = workCategory(work);
       if (!options.selectedCategories.has(category)) {
         skipped.push({ work, reason: `未选择分类：${BATCH_CATEGORY_LABELS[category] || "其他"}` });
         return;
       }
-      const titleKey = normalizedTitleKey(work.title);
+      const titleKey = `${work.kind || "work"}:${normalizedTitleKey(work.title)}`;
       if (options.skipDuplicateTitles && titleKey && seenTitles.has(titleKey)) {
         skipped.push({ work, reason: "同名作业已跳过" });
         return;
@@ -1699,7 +1923,7 @@
     list.textContent = "";
     if (listCount) listCount.textContent = `共 ${works.length} 个`;
     if (!works.length) {
-      list.textContent = "没有识别到作业";
+      list.textContent = `没有识别到${panel.__cxBatchLabel || "作业"}`;
       return;
     }
     const options = readBatchOptions(panel);
@@ -1729,7 +1953,9 @@
 
       const title = document.createElement("span");
       title.className = "cx-work-title";
-      title.textContent = workCategory(work) === "answered" ? work.title : `${work.title}（${NO_ANSWER_MARK}）`;
+      const kindLabel = work.kind === "exam" ? "考试" : "作业";
+      const displayTitle = workCategory(work) === "answered" ? work.title : `${work.title}（${NO_ANSWER_MARK}）`;
+      title.textContent = `[${kindLabel}] ${displayTitle}`;
       title.title = title.textContent;
 
       const badge = document.createElement("span");
@@ -1791,11 +2017,12 @@
     const list = panel.querySelector("[data-batch-list]");
     const listCount = panel.querySelector("[data-batch-list-count]");
     const oldText = button ? button.textContent : "";
+    const itemLabel = panel.__cxBatchLabel || "作业";
     if (button) {
       button.disabled = true;
       button.textContent = "读取中";
     }
-    if (list) list.textContent = "正在读取全部页作业...";
+    if (list) list.textContent = `正在读取全部页${itemLabel}...`;
     if (listCount) listCount.textContent = "";
     try {
       if (button) {
@@ -1824,9 +2051,9 @@
     }
   }
 
-  function buildBatchSummary(exported, skipped, failures) {
+  function buildBatchSummary(exported, skipped, failures, itemLabel = "作业") {
     const lines = [
-      "学习通作业批量导出清单",
+      `学习通${itemLabel}批量导出清单`,
       `生成时间：${new Date().toLocaleString()}`,
       `导出成功：${exported.length}`,
       `跳过：${skipped.length}`,
@@ -1852,9 +2079,10 @@
 
   async function prepareBatchWorks(panel, button) {
     const oldText = button ? button.textContent : "";
+    const itemLabel = panel.__cxBatchLabel || "作业";
     if (button) {
       button.disabled = true;
-      button.textContent = "检测作业中";
+      button.textContent = `检测${itemLabel}中`;
     }
     try {
       let works = [];
@@ -1873,8 +2101,8 @@
       }
       const options = readBatchOptions(panel);
       const { filtered, skipped } = filterWorksForBatch(works, options);
-      if (!filtered.length) throw new Error("没有符合当前筛选条件的作业。");
-      return { works: filtered, skipped, options, oldText };
+      if (!filtered.length) throw new Error(`没有符合当前筛选条件的${itemLabel}。`);
+      return { works: filtered, skipped, options, oldText, itemLabel };
     } catch (error) {
       if (button) {
         button.disabled = false;
@@ -1899,7 +2127,7 @@
       alert(error.message || String(error));
       return;
     }
-    const { works, skipped, options, oldText } = prepared;
+    const { works, skipped, options, oldText, itemLabel } = prepared;
 
     const zipFiles = [];
     const failures = [];
@@ -1937,7 +2165,7 @@
     if (options.addSummary) {
       zipFiles.push({
         name: "导出清单.txt",
-        content: buildBatchSummary(exported, skipped, failures),
+        content: buildBatchSummary(exported, skipped, failures, itemLabel),
       });
     } else if (failures.length) {
       zipFiles.push({
@@ -1948,15 +2176,15 @@
 
     if (zipFiles.length) {
       button.textContent = "生成ZIP中";
-      downloadBlob(`${safeFileName(document.title || "学习通作业答案")}.zip`, createZipBlob(zipFiles));
+      downloadBlob(`${safeFileName(document.title || `学习通${itemLabel}答案`)}.zip`, createZipBlob(zipFiles));
     }
 
     restoreBatchButton(button, oldText);
 
     if (failures.length) {
-      alert(`已打包 ${exported.length} 个作业，跳过 ${skipped.length} 个，失败 ${failures.length} 个。`);
+      alert(`已打包 ${exported.length} 个${itemLabel}，跳过 ${skipped.length} 个，失败 ${failures.length} 个。`);
     } else {
-      alert(`已打包 ${exported.length} 个作业，跳过 ${skipped.length} 个。`);
+      alert(`已打包 ${exported.length} 个${itemLabel}，跳过 ${skipped.length} 个。`);
     }
   }
 
@@ -1969,7 +2197,7 @@
       alert(error.message || String(error));
       return;
     }
-    const { works, skipped, options, oldText } = prepared;
+    const { works, skipped, options, oldText, itemLabel } = prepared;
     const zipFiles = [];
     const failures = [];
     const exported = [];
@@ -2004,7 +2232,7 @@
     if (options.addSummary) {
       zipFiles.push({
         name: "导出清单.txt",
-        content: buildBatchSummary(exported, skipped, failures),
+        content: buildBatchSummary(exported, skipped, failures, itemLabel),
       });
     } else if (failures.length) {
       zipFiles.push({
@@ -2014,15 +2242,15 @@
     }
     if (zipFiles.length) {
       button.textContent = "生成ZIP中";
-      downloadBlob(`${safeFileName(document.title || "学习通作业答案")}-${format}.zip`, createZipBlob(zipFiles));
+      downloadBlob(`${safeFileName(document.title || `学习通${itemLabel}答案`)}-${format}.zip`, createZipBlob(zipFiles));
     }
     restoreBatchButton(button, oldText);
-    alert(`已导出 ${exported.length} 个作业，跳过 ${skipped.length} 个，失败 ${failures.length} 个。`);
+    alert(`已导出 ${exported.length} 个${itemLabel}，跳过 ${skipped.length} 个，失败 ${failures.length} 个。`);
   }
 
   async function batchExportPdf(button) {
     const panel = button.closest(`#${PANEL_ID}`) || document;
-    const win = openExportWindow("正在生成 PDF", "正在读取作业并生成打印页面，请稍候...");
+    const win = openExportWindow("正在生成 PDF", "正在读取内容并生成打印页面，请稍候...");
     if (!win) {
       alert("浏览器拦截了弹窗，请允许此页面打开新窗口后再试。");
       return;
@@ -2035,7 +2263,7 @@
       alert(error.message || String(error));
       return;
     }
-    const { works, options, oldText } = prepared;
+    const { works, options, oldText, itemLabel } = prepared;
     const items = [];
     const failures = [];
     for (let index = 0; index < works.length; index += 1) {
@@ -2061,19 +2289,20 @@
     }
     restoreBatchButton(button, oldText);
     if (!items.length) {
-      writeWindowMessage(win, "没有成功生成 PDF 内容", failures.length ? failures.join("\n") : "没有符合当前条件的作业。");
+      writeWindowMessage(win, "没有成功生成 PDF 内容", failures.length ? failures.join("\n") : `没有符合当前条件的${itemLabel}。`);
       alert("没有成功生成 PDF 内容。" + (failures.length ? "\n" + failures.join("\n") : ""));
       return;
     }
-    const html = buildBatchPrintableHtml(items, document.title || "学习通作业批量导出", {
+    const html = buildBatchPrintableHtml(items, document.title || `学习通${itemLabel}批量导出`, {
       printFriendly: options.printFriendly,
+      itemLabel,
     });
     win.document.open();
     win.document.write(html);
     win.document.close();
     setTimeout(() => win.print(), 500);
     if (failures.length) {
-      alert(`PDF 页面已生成，${failures.length} 个作业失败，未加入 PDF。`);
+      alert(`PDF 页面已生成，${failures.length} 个${itemLabel}失败，未加入 PDF。`);
     }
   }
 
@@ -2140,10 +2369,20 @@
     const oldPanel = document.getElementById(PANEL_ID);
     if (oldPanel) oldPanel.remove();
 
-    const isCourseHome = /\/mooc2-ans\/mycourse\/stu/.test(location.pathname);
-    const isWorkList = /\/work\/list/.test(location.pathname) || isCourseHome || document.querySelector('li[onclick*="goTask"][data]');
+    if (shouldSuppressFramePanel()) return;
+
+    const isCourseHome = isCourseHomePage();
+    const isExamList = isExamListPage();
+    const isExamDetail = /\/exam-ans\/exam\/test\/(?:look|reVersionPaperMarkContentNew)/.test(location.pathname);
+    const batchSources = accessibleBatchSources();
+    const hasDirectWorkList = Boolean(document.querySelector('li[onclick*="goTask"][data]'));
+    const isWorkList = isExamList || /\/work\/list/.test(location.pathname) || hasDirectWorkList || isCourseHome;
     const questions = collectQuestions();
-    const works = isWorkList ? parseWorkList() : [];
+    const works = isWorkList ? uniqueWorks(batchSources.flatMap((source) => [
+      ...parseWorkList(source.root, source.href),
+      ...parseExamList(source.root, source.href),
+    ])) : [];
+    if (!isWorkList && !isExamDetail && !questions.length) return;
     const panel = document.createElement("div");
     panel.id = PANEL_ID;
 
@@ -2232,7 +2471,11 @@
     if (isWorkList) {
       const row = document.createElement("div");
       row.className = "cx-row";
-      count.textContent = `批量导出作业${works.length ? `（当前页${works.length}个）` : ""}`;
+      const hasWorks = works.some((work) => work.kind === "work") || isCourseHome || (!works.length && !isExamList);
+      const hasExams = works.some((work) => work.kind === "exam") || isCourseHome || isExamList;
+      const batchLabel = hasWorks && hasExams ? "作业+考试" : hasExams ? "考试" : "作业";
+      panel.__cxBatchLabel = batchLabel;
+      count.textContent = `批量导出${batchLabel}${works.length ? `（当前页${works.length}个）` : ""}`;
       row.appendChild(count);
       const settingsButton = addButton("⚙", "settings", true);
       settingsButton.className = "cx-icon";
@@ -2279,11 +2522,13 @@
       tools.className = "cx-list-tools";
       const listCount = document.createElement("span");
       listCount.dataset.batchListCount = "true";
-      listCount.textContent = works.length ? `当前页 ${works.length} 个` : "读取作业列表";
+      listCount.textContent = works.length ? `当前页 ${works.length} 个` : `读取${batchLabel}列表`;
       tools.appendChild(listCount);
       tools.appendChild(addButton("刷新", "refresh-list", true)).className = "cx-link";
       tools.appendChild(addButton("全选", "select-all", true)).className = "cx-link";
       tools.appendChild(addButton("全不选", "select-none", true)).className = "cx-link";
+      addCheckbox(tools, "显示考试", { batchKind: "exam" }, true).classList.add("cx-inline-check");
+      addCheckbox(tools, "显示作业", { batchKind: "work" }, true).classList.add("cx-inline-check");
       panel.appendChild(tools);
 
       const list = document.createElement("div");
@@ -2334,7 +2579,7 @@
       const check = event.target.closest(".cx-check");
       if (check) {
         check.setAttribute("aria-checked", check.getAttribute("aria-checked") === "true" ? "false" : "true");
-        if ((check.dataset.batchCategory || check.dataset.batchOption === "skip-duplicate-titles") && panel.__cxBatchWorks) {
+        if ((check.dataset.batchCategory || check.dataset.batchKind || check.dataset.batchOption === "skip-duplicate-titles") && panel.__cxBatchWorks) {
           resetBatchAutoSelection(panel);
         }
         return;
